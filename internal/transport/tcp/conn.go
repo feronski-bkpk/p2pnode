@@ -9,16 +9,13 @@ import (
 	"p2pnode/internal/transport"
 )
 
-// conn — реализация transport.Conn поверх net.Conn.
-// Один writer-guard: WriteFrame не должен вызываться из двух горутин одновременно.
 type conn struct {
 	nc net.Conn
-	r  *bufio.Reader // буферизуем чтение — меньше syscalls на заголовках
+	r  *bufio.Reader
 	w  *bufio.Writer
 
-	wmu sync.Mutex // сериализует WriteFrame
+	wmu sync.Mutex
 
-	// таймауты на кадр; 0 = без таймаута
 	readTimeout time.Duration
 }
 

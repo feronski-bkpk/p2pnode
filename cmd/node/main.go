@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"p2pnode/internal/dht"
 	"p2pnode/internal/dispatch"
 	"p2pnode/internal/transport"
 	"p2pnode/internal/transport/tcp"
@@ -15,27 +17,36 @@ import (
 func main() {
 	var (
 		listenAddr = flag.String("listen", ":9000", "адрес для входящих соединений")
-		connectTo  = flag.String("connect", "", "адрес узла для подключения (host:port)")
-		message    = flag.String("msg", "", "текстовое сообщение для отправки")
-		logLevel   = flag.String("log", "info", "уровень логов: debug|info|warn|error")
+		bootstrap  = flag.String("bootstrap", "", "адрес seed-узла (host:port)")
+		connectTo  = flag.String("connect", "", "разовое подключение для теста (host:port)")
+		message    = flag.String("msg", "", "сообщение для отправки (тест транспорта)")
+		logLevel   = flag.String("log", "info", "debug|info|warn|error")
 	)
 	flag.Parse()
 
 	log := newLogger(*logLevel)
-
 	tr := tcp.New()
-	disp := dispatch.New(log)
-	registerEchoHandlers(disp, log)
 
-	// Слушаем входящие — всегда.
-	ln, err := tr.Listen(*listenAddr)
+	selfID, err := dht.RandomID()
 	if err != nil {
-		log.Error("listen failed", "addr", *listenAddr, "err", err)
+		log.Error("random id", "err", err)
 		os.Exit(1)
 	}
-	log.Info("listening", "addr", ln.Addr())
 
-	// Принимаем соединения.
+	ln, err := tr.Listen(*listenAddr)
+	if err != nil {
+		log.Error("listen", "addr", *listenAddr, "err", err)
+		os.Exit(1)
+	}
+	selfAddr := ln.Addr()
+	log.Info("listening", "addr", selfAddr, "id", selfID.String())
+
+	d := dht.New(selfID, selfAddr, tr, log)
+
+	disp := dispatch.New(log)
+	d.RegisterAll(disp)
+	registerEchoHandlers(disp, log)
+
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -43,37 +54,41 @@ func main() {
 				log.Debug("accept end", "err", err)
 				return
 			}
-			log.Info("incoming connection", "remote", c.RemoteAddr())
 			go disp.Serve(c)
 		}
 	}()
 
-	// Исходящее соединение — если попросили.
+	if *bootstrap != "" {
+		if err := d.Bootstrap(*bootstrap); err != nil {
+			log.Error("bootstrap failed", "seed", *bootstrap, "err", err)
+		} else {
+			log.Info("bootstrap ok", "table_size", d.Table().Size())
+			for _, n := range d.Table().Snapshot() {
+				log.Info("known peer", "id", n.ID.String(), "addr", n.Addr)
+			}
+		}
+	}
+
 	if *connectTo != "" {
 		c, err := tr.Dial(*connectTo)
 		if err != nil {
-			log.Error("dial failed", "addr", *connectTo, "err", err)
+			log.Error("dial", "addr", *connectTo, "err", err)
 			os.Exit(1)
 		}
-		log.Info("connected", "remote", c.RemoteAddr())
-
+		defer c.Close()
 		if *message != "" {
-			f := transport.Frame{
+			if err := c.WriteFrame(transport.Frame{
 				Type:    transport.MsgText,
 				Payload: []byte(*message),
-			}
-			if err := c.WriteFrame(f); err != nil {
-				log.Error("write failed", "err", err)
+			}); err != nil {
+				log.Error("write", "err", err)
 				os.Exit(1)
 			}
-			log.Info("sent", "bytes", len(f.Payload))
+			log.Info("sent", "bytes", len(*message))
 		}
-
-		// Читаем входящие на этом соединении тоже.
 		go disp.Serve(c)
 	}
 
-	// Ждём Ctrl+C.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
@@ -82,16 +97,6 @@ func main() {
 }
 
 func registerEchoHandlers(d *dispatch.Dispatcher, log *slog.Logger) {
-	// PING → PONG
-	d.Register(transport.MsgPing, func(c transport.Conn, f transport.Frame) error {
-		return c.WriteFrame(transport.Frame{Type: transport.MsgPong})
-	})
-	// PONG — просто лог
-	d.Register(transport.MsgPong, func(c transport.Conn, f transport.Frame) error {
-		log.Info("pong", "remote", c.RemoteAddr())
-		return nil
-	})
-	// TEXT — печатаем
 	d.Register(transport.MsgText, func(c transport.Conn, f transport.Frame) error {
 		log.Info("text received", "remote", c.RemoteAddr(), "body", string(f.Payload))
 		return nil
@@ -110,6 +115,7 @@ func newLogger(level string) *slog.Logger {
 	default:
 		lvl = slog.LevelInfo
 	}
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})
-	return slog.New(h)
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 }
+
+var _ = fmt.Sprintf

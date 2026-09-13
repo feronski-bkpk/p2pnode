@@ -2,8 +2,6 @@ package transport
 
 import "io"
 
-// MsgType — тип кадра. 1 байт, значения 0x00–0xFF.
-// 0x00 зарезервирован под "invalid".
 type MsgType uint8
 
 const (
@@ -26,14 +24,11 @@ const (
 	MsgFileReq   MsgType = 0x23
 )
 
-// Frame — единица обмена поверх транспорта.
 type Frame struct {
 	Type    MsgType
 	Payload []byte
 }
 
-// Conn — абстракция соединения. Реализации: TCP (сейчас), UDP (потом).
-// ReadFrame/WriteFrame атомарны на уровне кадра.
 type Conn interface {
 	ReadFrame() (Frame, error)
 	WriteFrame(Frame) error
@@ -41,18 +36,15 @@ type Conn interface {
 	Close() error
 }
 
-// Listener — абстракция слушателя.
 type Listener interface {
 	Accept() (Conn, error)
 	Close() error
 	Addr() string
 }
 
-// Transport — фабрика соединений и слушателей.
 type Transport interface {
 	Listen(addr string) (Listener, error)
 	Dial(addr string) (Conn, error)
 }
 
-// ErrClosed — соединение/слушатель закрыт.
 var ErrClosed = io.ErrClosedPipe

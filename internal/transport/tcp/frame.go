@@ -13,12 +13,8 @@ const (
 	magic0 byte = 0x50
 	magic1 byte = 0x32
 
-	// header: magic(2) + type(1) + len(4)
 	headerSize = 7
 
-	// 16 МБ — с запасом под чанки файлов и DHT-ответы.
-	// Прикладной слой дробит файлы на чанки по 256 КБ,
-	// так что 16 МБ — защита от злонамеренного/битого length.
 	MaxPayloadSize = 16 * 1024 * 1024
 )
 
@@ -29,7 +25,6 @@ var (
 	ErrShortRead = errors.New("tcp: short read")
 )
 
-// WriteFrame сериализует кадр в w.
 func WriteFrame(w io.Writer, f transport.Frame) error {
 	if len(f.Payload) > MaxPayloadSize {
 		return fmt.Errorf("%w: %d > %d", ErrTooLarge, len(f.Payload), MaxPayloadSize)
@@ -44,8 +39,6 @@ func WriteFrame(w io.Writer, f transport.Frame) error {
 	hdr[2] = byte(f.Type)
 	binary.BigEndian.PutUint32(hdr[3:7], uint32(len(f.Payload)))
 
-	// Один Write на заголовок + один на payload — минимизируем syscalls.
-	// Для TCP это ок: ядро склеит.
 	if _, err := w.Write(hdr[:]); err != nil {
 		return fmt.Errorf("tcp: write header: %w", err)
 	}
@@ -57,8 +50,6 @@ func WriteFrame(w io.Writer, f transport.Frame) error {
 	return nil
 }
 
-// ReadFrame читает ровно один кадр из r.
-// Возвращает io.EOF, если поток закрыт до начала кадра.
 func ReadFrame(r io.Reader) (transport.Frame, error) {
 	var hdr [headerSize]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {

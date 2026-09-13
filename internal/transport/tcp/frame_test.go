@@ -50,7 +50,6 @@ func TestReadFrame_BadMagic(t *testing.T) {
 }
 
 func TestReadFrame_TooLarge(t *testing.T) {
-	// magic + type + length = 0xFFFFFFFF
 	hdr := []byte{0x50, 0x32, 0x20, 0xFF, 0xFF, 0xFF, 0xFF}
 	_, err := ReadFrame(bytes.NewReader(hdr))
 	if !errors.Is(err, ErrTooLarge) {
@@ -67,9 +66,7 @@ func TestReadFrame_EOF(t *testing.T) {
 
 func TestReadFrame_TruncatedPayload(t *testing.T) {
 	var buf bytes.Buffer
-	// пишем кадр с payload 100 байт
 	_ = WriteFrame(&buf, transport.Frame{Type: transport.MsgText, Payload: bytes.Repeat([]byte{1}, 100)})
-	// обрезаем до 50
 	truncated := buf.Bytes()[:headerSize+50]
 	_, err := ReadFrame(bytes.NewReader(truncated))
 	if err == nil {

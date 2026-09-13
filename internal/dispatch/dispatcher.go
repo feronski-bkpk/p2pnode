@@ -8,11 +8,8 @@ import (
 	"p2pnode/internal/transport"
 )
 
-// Handler обрабатывает один кадр. Возвращает ошибку — она логируется,
-// но не рвёт соединение (решение принимает вызывающий цикл).
-type Handler func(c transport.Conn, f transport.Frame) error
+type Handler = func(c transport.Conn, f transport.Frame) error
 
-// Dispatcher — реестр обработчиков по типу сообщения.
 type Dispatcher struct {
 	mu       sync.RWMutex
 	handlers map[transport.MsgType]Handler
@@ -26,7 +23,6 @@ func New(log *slog.Logger) *Dispatcher {
 	}
 }
 
-// Register добавляет обработчик. Паника при дубликате — это программная ошибка.
 func (d *Dispatcher) Register(t transport.MsgType, h Handler) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -36,7 +32,6 @@ func (d *Dispatcher) Register(t transport.MsgType, h Handler) {
 	d.handlers[t] = h
 }
 
-// Dispatch вызывает обработчик для кадра.
 func (d *Dispatcher) Dispatch(c transport.Conn, f transport.Frame) error {
 	d.mu.RLock()
 	h, ok := d.handlers[f.Type]
@@ -48,8 +43,6 @@ func (d *Dispatcher) Dispatch(c transport.Conn, f transport.Frame) error {
 	return h(c, f)
 }
 
-// Serve читает кадры из c до ошибки и передаёт их в Dispatch.
-// Блокируется; вызывать в отдельной горутине.
 func (d *Dispatcher) Serve(c transport.Conn) {
 	defer c.Close()
 	for {

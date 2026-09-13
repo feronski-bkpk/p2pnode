@@ -7,7 +7,6 @@ import (
 	"p2pnode/internal/transport"
 )
 
-// Transport — TCP-реализация transport.Transport.
 type Transport struct{}
 
 func New() *Transport { return &Transport{} }

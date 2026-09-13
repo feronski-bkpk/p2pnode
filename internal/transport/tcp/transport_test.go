@@ -22,7 +22,6 @@ func TestTwoNodesExchange(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Сервер: принимает одно соединение, читает кадр, эхом отвечает.
 	go func() {
 		defer wg.Done()
 		c, err := ln.Accept()
@@ -49,7 +48,6 @@ func TestTwoNodesExchange(t *testing.T) {
 		}
 	}()
 
-	// Клиент: подключается, шлёт кадр, читает ответ.
 	c, err := tr.Dial(ln.Addr())
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -87,7 +85,7 @@ func TestManyFrames(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_ = c.WriteFrame(f) // эхо
+			_ = c.WriteFrame(f)
 		}
 	}()
 
@@ -117,12 +115,10 @@ func TestManyFrames(t *testing.T) {
 
 func TestDialTimeout(t *testing.T) {
 	tr := New()
-	// порт, который вряд ли занят
 	_, err := tr.Dial("127.0.0.1:1")
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
-	// быстрый sanity-check, что ошибка не EOF
 	if errors.Is(err, transport.ErrClosed) {
 		t.Fatal("unexpected ErrClosed")
 	}

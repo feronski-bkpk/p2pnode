@@ -15,7 +15,6 @@ func (l *listener) Accept() (transport.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Отключаем Nagle — нам важна задержка, не throughput.
 	if tc, ok := nc.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 	}
