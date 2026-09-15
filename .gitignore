@@ -1,0 +1,14 @@
+/bin/
+/node
+
+/state/
+/logs/
+/metrics/
+/demo/
+
+.idea/
+.vscode/
+*.swp
+
+*.test
+*.out

@@ -7,7 +7,8 @@ import (
 )
 
 type listener struct {
-	ln net.Listener
+	ln   net.Listener
+	opts Options
 }
 
 func (l *listener) Accept() (transport.Conn, error) {
@@ -18,7 +19,7 @@ func (l *listener) Accept() (transport.Conn, error) {
 	if tc, ok := nc.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 	}
-	return newConn(nc), nil
+	return newConn(nc, l.opts), nil
 }
 
 func (l *listener) Close() error { return l.ln.Close() }

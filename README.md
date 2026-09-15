@@ -1,47 +1,31 @@
 # p2pnode — узел защищённой оверлейной P2P-сети
 
-Прототип узла децентрализованной телекоммуникационной сети, работающей
-поверх TCP/IP. Узел:
-
-- обнаруживает других участников через **распределённую хэш-таблицу (DHT)**
-  на основе **Kademlia**;
-- обменивается данными (сообщениями и файлами) с адресацией по псевдониму
-  через DHT;
-- защищает канал связи **аутентифицированным шифрованием** (AEAD) с защитой
-  от replay-атак;
-- устойчив к отказу отдельного узла (репликация данных на K ближайших
-  узлов, итеративный поиск по нескольким путям).
+Прототип узла децентрализованной телекоммуникационной сети, работающей поверх TCP/IP.
 
 ## Содержание
 
 - [Требования](#требования)
 - [Быстрый старт](#быстрый-старт)
 - [Архитектура](#архитектура)
-- [Структура репозитория](#структура-репозитория)
-- [Как это работает](#как-это-работает)
-  - [Транспорт и кадрирование](#транспорт-и-кадрирование)
-  - [DHT: идентификаторы и метрика](#dht-идентификаторы-и-метрика)
-  - [DHT: таблица маршрутизации](#dht-таблица-маршрутизации)
-  - [DHT: обнаружение узлов](#dht-обнаружение-узлов)
-  - [DHT: хранение значений](#dht-хранение-значений)
-- [Ручные сценарии](#ручные-сценарии)
+- [Формат кадра и протокол](#формат-кадра-и-протокол)
+- [Идентичность и NodeID](#идентичность-и-nodeid)
+- [Kademlia DHT](#kademlia-dht)
+- [Bootstrap и lookup](#bootstrap-и-lookup)
+- [Развёртывание тестового стенда](#развёртывание-тестового-стенда)
+- [Проверка невырожденности DHT](#проверка-невырожденности-dht)
 - [Тесты](#тесты)
-- [Roadmap](#roadmap)
-- [Ограничения и упрощения](#ограничения-и-упрощения)
 
 ## Требования
 
-- **Go** 1.22 или новее (`go version`).
-- **GNU Make** (опционально, для удобных команд).
-- **Docker** и **Docker Compose** — только для этапа развёртывания тестовой
-  сети из 5–7 узлов.
-- **tcpdump** / **Wireshark** — только для демонстрации шифрования канала.
+- **Go** 1.22 или новее.
+- **GNU Make** (опционально).
+- **Python 3** (для скриптов проверки метрик).
 
 Внешние Go-зависимости:
 
-- `github.com/vmihailenco/msgpack/v5` — сериализация DHT-сообщений.
+- `github.com/vmihailenco/msgpack/v5` — сериализация payload'ов.
 
-Установка зависимостей:
+Установка:
 
 ```bash
 go mod download
@@ -61,300 +45,417 @@ go build ./...
 go test ./...
 ```
 
-Полный вывод с подробностями:
-
-```bash
-go test ./... -v
-```
-
 ### Запуск одного узла
 
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9001 -log debug
+go run ./cmd/node \
+    -state-dir /tmp/node-01 \
+    -listen-host 127.0.0.1 \
+    -listen-port 9001 \
+    -log-level INFO
 ```
 
-Узел сгенерирует случайный 256-битный ID, поднимет TCP-слушатель на
-указанном адресе и будет ждать входящих соединений. В логе появятся
-строки:
+В логе:
 
 ```
-level=INFO msg=listening addr=127.0.0.1:9001 id=<hex>
+level=INFO msg=listening addr=127.0.0.1:9001 \
+    node_id=<64 hex> state_dir=/tmp/node-01 k=4 alpha=3
+level=INFO msg="bootstrap: skipped (no peers)"
+level=INFO msg="bootstrap complete" table_size=0
 ```
 
 ### Запуск второго узла с bootstrap
 
-В отдельном терминале:
-
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9002 \
+go run ./cmd/node \
+    -state-dir /tmp/node-02 \
+    -listen-host 127.0.0.1 \
+    -listen-port 9002 \
     -bootstrap 127.0.0.1:9001 \
-    -log debug
+    -log-level INFO
 ```
 
 Второй узел:
 
-1. Отправит `PING` первому узлу, чтобы узнать его ID.
-2. Запросит `FIND_NODE(свой_ID)` — получит ближайших известных узлов.
-3. Пинганёт их, чтобы они добавили его в свои таблицы.
-4. Выполнит self-lookup — итеративный поиск по собственному ID.
+1. Отправит `PING` seed'у, чтобы узнать его `NodeID`.
+2. Добавит seed в таблицу.
+3. Выполнит итеративный `self-lookup`.
 
-В логе появятся строки:
-
-```
-level=INFO msg="bootstrap: seed identified" id=<hex> addr=127.0.0.1:9001
-level=INFO msg="bootstrap: initial nodes" count=1
-level=INFO msg="bootstrap: self-lookup done" found=1 table_size=1
-level=INFO msg="bootstrap ok" table_size=1
-level=INFO msg="known peer" id=<hex> addr=127.0.0.1:9001
-```
-
-### Остановка
-
-`Ctrl+C`. Узел корректно завершится:
+В логе:
 
 ```
-level=INFO msg="shutting down"
+level=INFO msg="bootstrap: pinging seed" addr=127.0.0.1:9001
+level=INFO msg="bootstrap: seed identified" node_id=<short> addr=127.0.0.1:9001
+level=INFO msg="bootstrap: self-lookup done" rpc=1 iterations=1 table_size=1
+level=INFO msg="bootstrap complete" table_size=1
+```
+
+### Полный эксперимент на N=15
+
+```bash
+chmod +x scripts/*.sh
+./scripts/run_experiment.sh 15 20
+```
+
+Скрипт:
+
+1. Останавливает предыдущий стенд.
+2. Запускает 15 узлов в star-схеме (порты 9001–9015).
+3. Ждёт 20 секунд сходимости.
+4. Собирает routing-снапшоты.
+5. Делает 30 контрольных lookup'ов.
+6. Проверяет невырожденность DHT по 4 критериям ТЗ.
+
+Результаты в `metrics/`:
+
+```
+metrics/
+├── routing-<nodeid>-<ts>.json          # периодические снапшоты
+├── collected/
+│   └── routing-<short>.json            # по одному свежему файлу на узел
+└── lookups/
+    └── lookup-<i>-to-<j>-<short>.json  # 30 контрольных lookup'ов
 ```
 
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Прикладной слой                                            │
-│  ├── TextService   — текстовые сообщения                    │
-│  └── FileService   — передача файлов чанками                │
-├─────────────────────────────────────────────────────────────┤
-│  DHT                                                        │
-│  ├── RoutingTable  — k-buckets, XOR-метрика                 │
-│  ├── PING / FIND_NODE                                       │
-│  └── STORE / FIND_VALUE                                     │
-├─────────────────────────────────────────────────────────────┤
-│  Crypto                                                     │
-│  ├── Handshake     — X25519 + Ed25519                       │
-│  └── AEAD          — ChaCha20-Poly1305 + anti-replay        │
-├─────────────────────────────────────────────────────────────┤
-│  Transport                                                  │
-│  ├── Frame         — length + type + payload                │
-│  └── Conn (TCP)    — абстракция для будущего UDP            │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  cmd/node — точка входа                                    │
+├────────────────────────────────────────────────────────────┤
+│  internal/node — сборка узла, bootstrap                    │
+├────────────────────────────────────────────────────────────┤
+│  internal/rpc — Client, Server, PING, FIND_NODE, lookup    │
+├────────────────────────────────────────────────────────────┤
+│  internal/routing — ID, XOR, Contact, k-buckets            │
+├────────────────────────────────────────────────────────────┤
+│  internal/identity — Ed25519, NodeID                       │
+├────────────────────────────────────────────────────────────┤
+│  internal/protocol — MsgType, Frame, payload               │
+├────────────────────────────────────────────────────────────┤
+│  internal/transport — Conn, Listener, Transport (TCP)      │
+├────────────────────────────────────────────────────────────┤
+│  internal/config — Config, Load (CLI+env+defaults)         │
+├────────────────────────────────────────────────────────────┤
+│  internal/metrics — экспорт routing/lookup в JSON          │
+└────────────────────────────────────────────────────────────┘
 ```
 
-## Структура репозитория
+### Структура репозитория
 
 ```
 p2pnode/
 ├── go.mod
 ├── go.sum
 ├── README.md
-├── cmd/
-│   └── node/
-│       └── main.go                 # точка входа: флаги, запуск, graceful shutdown
-└── internal/
-    ├── transport/
-    │   ├── transport.go            # интерфейсы Conn, Listener, Transport, Frame
-    │   └── tcp/
-    │       ├── frame.go            # кадрирование: [magic][type][len][payload]
-    │       ├── frame_test.go
-    │       ├── conn.go             # TCP Conn
-    │       ├── listener.go         # TCP Listener
-    │       ├── transport.go        # TCP Transport (Dial/Listen)
-    │       └── transport_test.go
-    ├── dispatch/
-    │   ├── dispatcher.go           # реестр обработчиков по типу сообщения
-    │   └── dispatcher_test.go
-    └── dht/
-        ├── id.go                   # ID, XOR-метрика
-        ├── id_test.go
-        ├── node.go                 # структура Node
-        ├── routing.go              # k-buckets, RoutingTable
-        ├── routing_test.go
-        ├── messages.go             # типы DHT-сообщений (msgpack)
-        ├── messages_test.go
-        ├── handlers.go             # HandlePing, HandleFindNode, RegisterAll
-        ├── dht.go                  # DHT: Ping, FindNode, Bootstrap
-        ├── dht_test.go
-        └── testcluster_test.go     # хелперы для интеграционных тестов
+├── cmd/node/main.go
+├── internal/
+│   ├── config/config.go
+│   ├── identity/identity.go + identity_test.go
+│   ├── protocol/{msgtype,frame,payload}.go + *_test.go
+│   ├── transport/
+│   │   ├── transport.go
+│   │   └── tcp/{conn,listener,transport}.go + transport_test.go
+│   ├── routing/{id,contact,bucket,routing}.go + *_test.go
+│   ├── rpc/{client,ping,find_node,server,lookup,checker}.go + *_test.go
+│   ├── node/node.go
+│   ├── metrics/{export,routing,lookup,network}.go + *_test.go
+│   └── integration/bootstrap_test.go
+└── scripts/
+    ├── common.sh
+    ├── run_star.sh
+    ├── run_ring.sh
+    ├── stop_all.sh
+    ├── collect_routing.sh
+    ├── lookup_batch.sh
+    ├── check_ne_degenerate.sh
+    └── run_experiment.sh
 ```
 
-## Как это работает
+## Формат кадра и протокол
 
-### Транспорт и кадрирование
-
-**Кадрирование:**
-Формат кадра (7 байт заголовка + payload):
+Все сообщения передаются поверх TCP с **собственным кадрированием**.
+Заголовок — 24 байта, все многобайтные числа big-endian:
 
 ```
-+--------+--------+--------+--------+----------------+
-|  magic |  type  |       length    |    payload     |
-| 2 байта| 1 байт |     4 байта     |  length байт   |
-+--------+--------+--------+--------+----------------+
-  0x50 0x32
++---------+--------+--------+-------------+----------------+---------+
+| version |  type  | flags  | request_id  | payload_length | payload |
+| 1 байт  | 1 байт | 2 байта| 16 байт     | 4 байта        | ≤64 KiB |
++---------+--------+--------+-------------+----------------+---------+
 ```
 
-- `magic = "P2"` — защита от мусора в потоке.
-- `type` — тип сообщения (PING, FIND_NODE, STORE, …).
-- `length` — big-endian, максимум 16 МБ (защита от вредоносного length).
-- `payload` — ровно `length` байт.
+Поля:
 
-Чтение кадра: `io.ReadFull(r, header)`, проверка magic, чтение ровно
-`length` байт payload.
+- `version` — версия протокола (сейчас `1`).
+- `type` — тип сообщения (см. таблицу ниже).
+- `flags` — зарезервировано (0 на этапе 2).
+- `request_id` — 128-битный идентификатор запроса, генерируется через
+  `crypto/rand`. Ответ обязан содержать **тот же** `request_id`.
+- `payload_length` — длина payload, **проверяется до выделения буфера**.
+  Максимум — `MAX_FRAME_PAYLOAD = 65536`.
+- `payload` — сериализованное сообщение (msgpack).
 
-Запись кадра: один `Write` на заголовок + один на payload, flush буфера.
+### Типы сообщений этапа 2
 
-### DHT: идентификаторы и метрика
+| Код | Имя | Направление |
+|-----|-----|-------------|
+| `0x01` | `PING` | запрос |
+| `0x02` | `PONG` | ответ |
+| `0x03` | `FIND_NODE_REQUEST` | запрос |
+| `0x04` | `FIND_NODE_RESPONSE` | ответ |
+| `0x7F` | `ERROR` | ответ/уведомление |
 
-- **ID узла — 256 бит** (`[32]byte`).
-- На этапе 2 генерируется случайно через `crypto/rand`.
-- На этапе 4 будет = `SHA-256(Ed25519 public key)`, что связывает
-  идентификатор с криптографическим ключом.
+Коды `0x05–0x3F` зарезервированы под следующие этапы
+(`STORE`, `FIND_VALUE`, туннели, приложения).
 
-**XOR-метрика:** расстояние между `a` и `b` = `a XOR b`. Свойства:
+### Сериализация payload
 
-- симметрична (`d(a,b) = d(b,a)`);
-- рефлексивна (`d(a,a) = 0`);
-- triangle inequality (`d(a,c) ≤ d(a,b) + d(b,c)`);
-- если `d(a,b) < 2^i`, то первые `256-i` бит `a` и `b` совпадают.
+Выбран **MessagePack** (`github.com/vmihailenco/msgpack/v5`) — компактнее
+JSON, не требует кодогенерации (в отличие от protobuf), остаётся
+языко-независимым (в отличие от gob).
 
-Последнее свойство — ключ к k-buckets: узлы с общим префиксом ID
-группируются в один бакет.
-
-### DHT: таблица маршрутизации
-
-**k-buckets:** 256 бакетов (по числу бит ID). Бакет `i` содержит узлы,
-у которых:
-
-- общий префикс с `self.ID` длиной `i` бит;
-- бит `i` отличается.
-
-Каждый бакет хранит до `K = 8` узлов, упорядоченных от oldest (head)
-к newest (tail).
-
-Операции:
-
-- `Add(node)` — добавить/обновить; если бакет полон, вытесняется oldest.
-- `Remove(id)` — удалить.
-- `Get(id)` — найти.
-- `Closest(target, n)` — вернуть `n` узлов, ближайших к `target`.
-- `Size()` — общее число узлов.
-- `Snapshot()` — копия всех узлов (для отладки).
-
-Защита от фантомов: `Add` отклоняет узлы с нулевым ID или пустым адресом.
-
-### DHT: обнаружение узлов
-
-**PING(node)** — проверка доступности. Возвращает `{FromID, FromAddr}`.
-Полезен при bootstrap, когда мы знаем только адрес, но не ID.
-
-**FIND_NODE(target)** — «дай K узлов, ближайших к target». Один RPC —
-это один шаг; полный поиск — итеративный:
+Примеры payload'ов:
 
 ```
-shortlist = table.Closest(target, K)
-queried   = {}
-while есть неопрошенные в shortlist:
-    toQuery = первые Alpha непрошенных из shortlist
-    параллельно шлём FIND_NODE(target) каждому
-    собираем ответы → newNodes
-    shortlist = uniqueSorted(shortlist + newNodes, target, K)
-    if все K ближайших опрошены: break
-return первые K из shortlist
+PING {
+  sender: Contact,
+  timestamp_ms: uint64
+}
+
+PONG {
+  responder: Contact,
+  ping_timestamp_ms: uint64,
+  responder_timestamp_ms: uint64
+}
+
+FIND_NODE_REQUEST {
+  sender: Contact,
+  target_node_id: bytes[32]
+}
+
+FIND_NODE_RESPONSE {
+  responder: Contact,
+  target_node_id: bytes[32],
+  contacts: Contact[]
+}
+
+ERROR {
+  code: string,
+  message: string
+}
 ```
 
-Параметры: `K = 8`, `Alpha = 3`. Гарантирует сходимость за O(log N)
-шагов.
+`Contact`:
 
-**Bootstrap(seedAddr):**
+```
+Contact {
+  node_id:            bytes[32]            // SHA-256(pubkey)
+  identity_algorithm: string               // "ed25519"
+  identity_public_key: bytes[32]           // Ed25519 public key
+  host: string
+  port: uint16
+}
+```
 
-1. `PING(seedAddr)` — узнать ID seed'а.
-2. `FIND_NODE(self.ID)` — забрать ближайших к себе.
-3. Пингануть найденных (асинхронно) — чтобы они узнали о нас.
-4. `FindNode(self.ID)` — self-lookup, заполняет бакеты вокруг своего ID.
+Поля `last_seen_ms` и `last_verified_ms` **не передаются по сети** — это
+локальные метаданные узла-наблюдателя.
 
-### DHT: хранение значений
+## Идентичность и NodeID
 
-- `STORE(key, value, ttl)` — сохранить пару на K ближайших к `key` узлах.
-- `FIND_VALUE(key)` — итеративный поиск: либо значение, либо список
-  ближайших узлов.
-- TTL: запись автоматически удаляется через `expires`.
-- Репликация: на K ближайших к `key` узлов (включая себя).
-- Re-publish: издатель раз в `TTL/2` переопубликовывает свои записи.
+Каждый узел при первом запуске создаёт долговременную пару **Ed25519**.
+Закрытый ключ хранится только в `-state-dir` и не покидает узел.
 
-## Ручные сценарии
+```
+identity.key  — 64 байта Ed25519 private key
+identity.pub  — 32 байта Ed25519 public key
+```
 
-### Сценарий 1: два узла, простой обмен
+`NodeID` вычисляется детерминированно:
 
-Терминал 1 (узел A):
+```
+NodeID = SHA-256(canonical_encode(identity_public_key))
+canonical_encode(pubkey) = pubkey_bytes  (для Ed25519 — просто 32 байта)
+```
+
+При получении `Contact` узел обязан проверить:
+
+- `len(identity_public_key) == 32`;
+- `identity_algorithm == "ed25519"`;
+- `SHA-256(identity_public_key) == node_id`;
+- `host` и `port` непусты.
+
+Контакт с несовпадающим `NodeID` и `pubkey` отклоняется как попытка
+подмены идентичности.
+
+## Kademlia DHT
+
+### XOR-метрика
+
+Расстояние между `NodeID` `a` и `b`:
+
+```
+d(a, b) = a XOR b   (256-битное число)
+```
+
+Свойства: симметричность, рефлексивность, triangle inequality.
+
+### k-buckets
+
+Таблица маршрутизации — 256 bucket'ов, индекс bucket'а — позиция
+старшего установленного бита в `self.ID XOR other.ID`.
+
+Каждый bucket вмещает до `K_BUCKET_SIZE = 4` контактов,
+упорядоченных от oldest (head) к newest (tail).
+
+**При добавлении контакта:**
+
+1. Валидация.
+2. Если контакт уже есть — обновить и переместить в tail.
+3. Если bucket не полон — добавить в tail.
+4. Если bucket полон:
+   - **PING head**;
+   - живой → переместить в tail, новый **не добавлять**;
+   - мёртвый → вытеснить, добавить нового.
+
+Это стандартное требование Kademlia: живой LRU-контакт не вытесняется.
+
+## Bootstrap и lookup
+
+### Bootstrap
+
+Новый узел с непустым `-bootstrap`:
+
+1. `PING(seed)` → узнать `NodeID` и `Contact` seed'а.
+2. Добавить seed в таблицу.
+3. Итеративный `FIND_NODE(self.ID)` — self-lookup.
+4. Итоговая таблица содержит 4–13 контактов (зависит от N).
+
+Bootstrap-узел **не является центральным каталогом**: после присоединения
+его недоступность не блокирует lookup'ы.
+
+### Итеративный lookup
+
+`LookupNode(target)`:
+
+1. `shortlist = table.Closest(target, K)`.
+2. На каждой итерации:
+   - выбрать до `ALPHA = 3` неопрошенных ближайших кандидатов;
+   - параллельно отправить `FIND_NODE_REQUEST`;
+   - собрать ответы, обновить `shortlist`;
+   - **early termination**, если target найден.
+3. Остановка: все `K` ближайших опрошены, либо target найден.
+
+`HandleFindNode` возвращает `K` контактов, **включая самого отвечающего**,
+если он входит в число `K` ближайших к target. Это позволяет инициатору
+найти цель, если она и есть отвечающий узел.
+
+### Формат лога lookup
+
+Каждый lookup экспортируется в JSON:
+
+```json
+{
+  "target": "abc...",
+  "initiator": "def...",
+  "start_unix_ms": 1712345678000,
+  "end_unix_ms":   1712345678100,
+  "duration_ms": 100,
+  "rpc": 5,
+  "iterations": 2,
+  "timeouts": 0,
+  "target_absent_at_start": true,
+  "final_contacts": [...],
+  "iterations_log": [...]
+}
+```
+
+## Развёртывание тестового стенда
+
+### Star-схема
+
+Все узлы подключаются к одному seed'у:
 
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9001 -log debug
+./scripts/run_star.sh 15
 ```
 
-Терминал 2 (узел B, подключается к A и шлёт текстовое сообщение):
+- Узел 1 — seed, порт 9001.
+- Узлы 2..15 — порты 9002..9015, `-bootstrap 127.0.0.1:9001`.
+
+### Ring-схема
+
+Каждый узел знает только предыдущего:
 
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9002 \
-    -connect 127.0.0.1:9001 \
-    -msg "привет из узла B" \
-    -log debug
+./scripts/run_ring.sh 15
 ```
 
-В терминале 1 появится:
+- Узел 1 — seed.
+- Узел i — `-bootstrap 127.0.0.1:<порт i-1>`.
 
-```
-level=INFO msg="incoming connection" remote=127.0.0.1:xxxxx
-level=INFO msg="text received" remote=... body="привет из узла B"
-```
-
-> Примечание: этот сценарий проверяет **только транспорт** (этап 1).
-> Он не использует DHT. Для полноценного обмена нужен этап 5.
-
-### Сценарий 2: три узла, bootstrap
-
-Терминал 1 (seed, не закрывать):
+### Остановка
 
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9001 -log debug
+./scripts/stop_all.sh
 ```
 
-Терминал 2:
+### Полный эксперимент
 
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9002 \
-    -bootstrap 127.0.0.1:9001 -log debug
+./scripts/run_experiment.sh 15 20
 ```
 
-Терминал 3:
+Параметры: `N=15`, время сходимости `20` секунд.
+
+## Проверка невырожденности DHT
+
+ТЗ требует формального доказательства, что DHT не выродилась в полный
+реестр. Критерии (раздел 6 ТЗ):
+
+1. **≥80% узлов** после сходимости имеют в таблице **< N−1** контактов.
+2. **Ни один узел** не имеет полного реестра (`size ≥ N−1`).
+3. **≥30 контрольных lookup'ов**, где цель **отсутствует** в таблице
+   инициатора до начала поиска.
+4. **≥30 lookup'ов**, использующих **≥1 промежуточный узел** (`RPC ≥ 2`).
+
+Проверка:
 
 ```bash
-go run ./cmd/node -listen 127.0.0.1:9003 \
-    -bootstrap 127.0.0.1:9001 -log debug
+./scripts/check_ne_degenerate.sh
 ```
 
-Ожидаемое поведение:
+Ожидаемый вывод:
 
-- Node 2 знает seed (1 peer).
-- Node 3 знает seed и node 2 (2 peers).
-- Через несколько секунд node 2 тоже узнаёт о node 3 (когда node 3
-  пинганул его на шаге 3 bootstrap).
+```
+[check] N = 15
+[check] table sizes: min=4 max=13 mean=6.73
+[check] nodes with < N-1 contacts: 15/15 (100.0%)
+[check] criterion 1 (>=80% < N-1):        True
+[check] criterion 1b (no full registry):  True
+[check] buckets per node: min=2 max=6 mean=4.00
+[check] max bucket fill:  min=1 max=4
 
-В логе каждого узла — `known peer` со списком реальных ID и адресов.
+[check] lookup'ов всего:               30
+[check] цель отсутствовала до старта:  30
+[check] с промежуточным узлом (RPC≥2): 30
+[check] успешных (target в final):     30
+[check] criterion 2 (>=30 absent):     True
+[check] criterion 3 (>=30 w/ interm):  True
 
-### Сценарий 3: пять узлов, проверка сходимости
-
-Запускаем пять узлов с одним seed'ом:
-
-```bash
-# терминал 1
-go run ./cmd/node -listen 127.0.0.1:9001 -log debug
-
-# терминалы 2–5
-for port in 9002 9003 9004 9005; do
-  go run ./cmd/node -listen 127.0.0.1:$port \
-      -bootstrap 127.0.0.1:9001 -log debug &
-done
+[check] RESULT: NON-DEGENERATE (все критерии выполнены)
 ```
 
-К концу запуска каждый узел должен знать хотя бы 3 других.
+### Гарантия прекондиции lookup
+
+Скрипт `lookup_batch.sh` запускает каждый lookup в **отдельном процессе**
+с временным `state-dir`:
+
+1. Копируется только `identity.{key,pub}` инициатора.
+2. Узел стартует с **пустой** таблицей.
+3. `-skip-self-lookup` — bootstrap забирает только соседей seed'а
+   (seed **не добавляется** в таблицу).
+4. Перед lookup `main.go` **удаляет target из таблицы**, если он там
+   оказался после bootstrap, — восстанавливая прекондицию ТЗ.
 
 ## Тесты
 
@@ -362,64 +463,21 @@ done
 go test ./... -v
 ```
 
-Покрытие по пакетам:
+Покрытие:
 
-### `internal/transport/tcp`
-- `TestFrameRoundTrip` — кадры разной длины (0, 5, 1 КБ, 64 КБ, 1 МБ).
-- `TestReadFrame_BadMagic`, `TestReadFrame_TooLarge`, `TestReadFrame_EOF`,
-  `TestReadFrame_TruncatedPayload` — обработка ошибок.
-- `TestTwoNodesExchange` — два узла на localhost, обмен.
-- `TestManyFrames` — 1000 кадров разной длины подряд.
-- `TestDialTimeout` — недоступный адрес.
+| Пакет | Тестов | Что покрыто |
+|-------|--------|-------------|
+| `identity` | 9 | Ed25519, детерминизм NodeID, персистентность, ошибки |
+| `protocol` | 19 | Frame round-trip, partial read, too big, bad version/type, request_id, payload'ы |
+| `transport/tcp` | 5 | Обмен, 1000 кадров, timeout, закрытие |
+| `routing` | 22 | XOR, k-buckets, LRU, PING-oldest, дубликаты, SnapshotBuckets |
+| `rpc` | 6 | PING round-trip, request_id mismatch, timeout, 3-узловой lookup |
+| `metrics` | 8 | Snapshot, экспорт JSON, критерии невырожденности |
+| `integration` | 2 | Star 5 узлов, Ring 5 узлов |
 
-### `internal/dispatch`
-- `TestRegisterAndDispatch`, `TestDispatchUnknownType`,
-  `TestRegisterDuplicatePanics`, `TestServeReadsUntilEOF`,
-  `TestServeContinuesAfterHandlerError`.
-
-### `internal/dht`
-- `TestDistanceSymmetric`, `TestDistanceSelfZero`,
-  `TestTriangleInequality`, `TestCommonPrefixLen`, `TestCloserTo`,
-  `TestIDHexRoundTrip` — метрика.
-- `TestBucketIndex`, `TestAddAndGet`, `TestAddDuplicateUpdates`,
-  `TestBucketEviction`, `TestClosest`, `TestRemove` — таблица
-  маршрутизации.
-- `TestPingRoundTrip`, `TestFindNodeResponseRoundTrip`,
-  `TestDecodeGarbage` — сериализация.
-- `TestBootstrap3Nodes`, `TestBootstrap5Nodes`, `TestPingDeadNode`,
-  `TestUniqueSorted` — интеграционные.
-
-## Roadmap
-
-| Этап | Что | Статус |
-|------|-----|--------|
-| 1 | Транспорт: кадры, TCP, диспетчер | готово |
-| 2 | DHT: ID, XOR, k-buckets, PING, FIND_NODE, bootstrap | готово |
-| 3 | DHT: STORE, FIND_VALUE, TTL, репликация | в работе |
-| 4 | Крипто: X25519, Ed25519, AEAD, anti-replay | soon |
-| 5 | Прикладной сервис: сообщения + файлы | soon |
-| 6 | Docker Compose, 5–7 узлов, 2 топологии, отказ | soon |
-| 7 | Метрики: сходимость, RTT, время отказа | soon |
-| 8 | Опционально: netem, NAT, Sybil | soon |
-| 9 | Записка, USERGUIDE, презентация | soon |
-
-## Ограничения и упрощения
-
-1. **Транспорт только TCP.** UDP не реализован, но интерфейс `Conn`
-   абстрагирован — добавление UDP не потребует переписывания DHT.
-2. **Вытеснение из бакета без PING oldest.** Классическая Kademlia
-   сначала проверяет, жив ли самый старый узел, и только потом вытесняет.
-   У нас — просто вытесняем. Для сети 5–7 узлов переполнение бакета
-   невозможно (K=8), так что это чисто теоретическое упрощение.
-3. **Нет периодического refresh бакетов.** Узел не пингует соседей
-   регулярно, чтобы обнаружить отказ. Будет добавлено на этапе 6
-   (измерение времени обнаружения отказа).
-4. **Нет re-publish и expire** (этап 3, в работе).
-5. **Нет шифрования канала** (этап 4, в работе).
-6. **Хранилище in-memory.** При перезапуске узла данные теряются; re-publish
-   от издателя восстановит записи.
-7. **ID генерируется случайно**, а не из публичного ключа. На этапе 4
-   будет `SHA-256(pubkey)`.
-8. **Bootstrap не гарантирует сходимость всей сети** за один проход —
-   только регистрацию нового узла у seed и его окружения. Для полной
-   сходимости нужен либо периодический refresh, либо повторный bootstrap.
+**Ключевые тесты:**
+- `TestBucketFull_LiveHeadNotEvicted` — живой LRU не вытесняется.
+- `TestLookup3Nodes` — цель, отсутствующая у инициатора, найдена через
+  промежуточный узел (RPC ≥ 2).
+- `TestRequestIDMismatch` — ответ с чужим `request_id` отклоняется.
+- `TestStar5Nodes`, `TestRing5Nodes` — сходимость на 5 узлах.

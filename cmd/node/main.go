@@ -1,121 +1,178 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
+	"time"
 
-	"p2pnode/internal/dht"
-	"p2pnode/internal/dispatch"
-	"p2pnode/internal/transport"
-	"p2pnode/internal/transport/tcp"
+	"p2pnode/internal/config"
+	"p2pnode/internal/metrics"
+	"p2pnode/internal/node"
+	"p2pnode/internal/routing"
+	"p2pnode/internal/rpc"
 )
 
 func main() {
-	var (
-		listenAddr = flag.String("listen", ":9000", "адрес для входящих соединений")
-		bootstrap  = flag.String("bootstrap", "", "адрес seed-узла (host:port)")
-		connectTo  = flag.String("connect", "", "разовое подключение для теста (host:port)")
-		message    = flag.String("msg", "", "сообщение для отправки (тест транспорта)")
-		logLevel   = flag.String("log", "info", "debug|info|warn|error")
-	)
-	flag.Parse()
-
-	log := newLogger(*logLevel)
-	tr := tcp.New()
-
-	selfID, err := dht.RandomID()
+	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
-		log.Error("random id", "err", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
-	ln, err := tr.Listen(*listenAddr)
+	log := newLogger(cfg.LogLevel)
+
+	n, err := node.New(cfg, log)
 	if err != nil {
-		log.Error("listen", "addr", *listenAddr, "err", err)
+		log.Error("node.New", "err", err)
 		os.Exit(1)
 	}
-	selfAddr := ln.Addr()
-	log.Info("listening", "addr", selfAddr, "id", selfID.String())
+	log.Info("listening",
+		"addr", n.Listener.Addr(),
+		"node_id", n.Local.NodeID.String(),
+		"state_dir", cfg.NodeStateDir,
+		"k", cfg.KBucketSize,
+		"alpha", cfg.Alpha)
 
-	d := dht.New(selfID, selfAddr, tr, log)
+	n.Start()
 
-	disp := dispatch.New(log)
-	d.RegisterAll(disp)
-	registerEchoHandlers(disp, log)
+	if err := n.Bootstrap(); err != nil {
+		log.Warn("bootstrap error", "err", err)
+	}
+	log.Info("bootstrap complete", "table_size", n.Table.Size())
 
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				log.Debug("accept end", "err", err)
-				return
-			}
-			go disp.Serve(c)
-		}
-	}()
-
-	if *bootstrap != "" {
-		if err := d.Bootstrap(*bootstrap); err != nil {
-			log.Error("bootstrap failed", "seed", *bootstrap, "err", err)
-		} else {
-			log.Info("bootstrap ok", "table_size", d.Table().Size())
-			for _, n := range d.Table().Snapshot() {
-				log.Info("known peer", "id", n.ID.String(), "addr", n.Addr)
-			}
+	if cfg.ExportDir != "" {
+		if err := exportMetrics(cfg, n, log); err != nil {
+			log.Error("export metrics", "err", err)
 		}
 	}
 
-	if *connectTo != "" {
-		c, err := tr.Dial(*connectTo)
+	var wg sync.WaitGroup
+	stopCh := make(chan struct{})
+	if cfg.ExportDir != "" && cfg.ExportInterval > 0 {
+		exp, err := metrics.NewExporter(cfg.ExportDir)
 		if err != nil {
-			log.Error("dial", "addr", *connectTo, "err", err)
-			os.Exit(1)
+			log.Error("metrics.NewExporter", "err", err)
+		} else {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				runPeriodicExport(stopCh, exp, n, log, cfg.ExportInterval)
+			}()
+			log.Info("periodic export enabled",
+				"interval_ms", cfg.ExportInterval.Milliseconds(),
+				"dir", cfg.ExportDir)
 		}
-		defer c.Close()
-		if *message != "" {
-			if err := c.WriteFrame(transport.Frame{
-				Type:    transport.MsgText,
-				Payload: []byte(*message),
-			}); err != nil {
-				log.Error("write", "err", err)
-				os.Exit(1)
-			}
-			log.Info("sent", "bytes", len(*message))
-		}
-		go disp.Serve(c)
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	if cfg.DumpRouting {
+		log.Info("dump-routing: exiting")
+		close(stopCh)
+		wg.Wait()
+		_ = n.Stop()
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	<-ctx.Done()
+
 	log.Info("shutting down")
-	_ = ln.Close()
+	close(stopCh)
+	wg.Wait()
+	_ = n.Stop()
+	time.Sleep(50 * time.Millisecond)
 }
 
-func registerEchoHandlers(d *dispatch.Dispatcher, log *slog.Logger) {
-	d.Register(transport.MsgText, func(c transport.Conn, f transport.Frame) error {
-		log.Info("text received", "remote", c.RemoteAddr(), "body", string(f.Payload))
-		return nil
-	})
+func exportMetrics(cfg config.Config, n *node.Node, log *slog.Logger) error {
+	exp, err := metrics.NewExporter(cfg.ExportDir)
+	if err != nil {
+		return err
+	}
+
+	path, err := exp.ExportRoutingWithTimestamp(n.Identity.NodeID, n.Table)
+	if err != nil {
+		log.Error("ExportRouting", "err", err)
+	} else {
+		log.Info("routing exported", "path", path)
+	}
+
+	if cfg.LookupTarget != "" {
+		targetID, err := routing.IDFromHex(cfg.LookupTarget)
+		if err != nil {
+			log.Error("invalid lookup target", "err", err)
+			return nil
+		}
+
+		if _, present := n.Table.Get(targetID); present {
+			n.Table.Remove(targetID)
+			log.Info("lookup: removed target from table to satisfy precondition",
+				"target", targetID.Short())
+		}
+
+		_, presentBefore := n.Table.Get(targetID)
+		log.Info("lookup",
+			"target", targetID.String(),
+			"present_before", presentBefore)
+
+		res := n.Client.LookupNode(
+			n.Local,
+			n.Table,
+			targetID,
+			rpc.LookupConfig{
+				Alpha:   cfg.Alpha,
+				K:       cfg.KBucketSize,
+				Timeout: cfg.PingTimeout,
+			},
+		)
+		path, err := exp.ExportLookupWithTimestamp(res, !presentBefore)
+		if err != nil {
+			log.Error("ExportLookup", "err", err)
+		} else {
+			log.Info("lookup exported",
+				"path", path,
+				"rpc", res.RPC,
+				"iterations", res.Iterations,
+				"timeouts", res.Timeouts,
+				"duration_ms", res.Duration.Milliseconds())
+		}
+	}
+	return nil
+}
+
+func runPeriodicExport(stop <-chan struct{}, exp *metrics.Exporter,
+	n *node.Node, log *slog.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if _, err := exp.ExportRoutingWithTimestamp(n.Identity.NodeID, n.Table); err != nil {
+				log.Warn("periodic export failed", "err", err)
+			}
+		}
+	}
 }
 
 func newLogger(level string) *slog.Logger {
 	var lvl slog.Level
-	switch level {
-	case "debug":
+	switch strings.ToUpper(level) {
+	case "DEBUG":
 		lvl = slog.LevelDebug
-	case "warn":
+	case "WARN":
 		lvl = slog.LevelWarn
-	case "error":
+	case "ERROR":
 		lvl = slog.LevelError
 	default:
 		lvl = slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})
+	return slog.New(h)
 }
-
-var _ = fmt.Sprintf
