@@ -12,3 +12,5 @@
 
 *.test
 *.out
+
+/visualization/

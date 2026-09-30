@@ -30,6 +30,7 @@ func main() {
 		log.Error("node.New", "err", err)
 		os.Exit(1)
 	}
+	log.Info("config loaded", "source", cfg.Source())
 	log.Info("listening",
 		"addr", n.Listener.Addr(),
 		"node_id", n.Local.NodeID.String(),

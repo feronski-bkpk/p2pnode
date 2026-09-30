@@ -238,22 +238,111 @@ else
 fi
 rm -rf "$tmp_state"
 
-header "Шаг 7. Сводка"
+header "Шаг 7. Экспорт метрик в CSV"
+
+sub "demo/lookups.csv"
+python3 - <<'PYEOF'
+import json, glob, csv, os
+rows = []
+for f in sorted(glob.glob("metrics/lookups/lookup-*.json")):
+    s = json.load(open(f))
+    target = s.get("target", "")
+    finals = s.get("final_contacts") or []
+    found = any(c.get("node_id") == target for c in finals)
+    rows.append({
+        "target": target[:16],
+        "initiator": s.get("initiator", "")[:16],
+        "absent_at_start": s.get("target_absent_at_start", False),
+        "rpc": s.get("rpc", 0),
+        "iterations": s.get("iterations", 0),
+        "timeouts": s.get("timeouts", 0),
+        "duration_ms": s.get("duration_ms", 0),
+        "found": found,
+    })
+if not rows:
+    print("[csv] no lookups found")
+else:
+    os.makedirs("demo", exist_ok=True)
+    with open("demo/lookups.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[csv] wrote demo/lookups.csv with {len(rows)} rows")
+PYEOF
+
+sub "demo/routing.csv"
+python3 - <<'PYEOF'
+import json, glob, csv, os
+rows = []
+for f in sorted(glob.glob("metrics/collected/routing-*.json")):
+    s = json.load(open(f))
+    rows.append({
+        "node_id": s.get("node_id", "")[:16],
+        "table_size": s.get("size", 0),
+        "bucket_count": s.get("bucket_count", 0),
+        "max_bucket_fill": s.get("max_bucket_fill", 0),
+        "min_bucket_fill": s.get("min_bucket_fill", 0),
+    })
+if not rows:
+    print("[csv] no routing snapshots found")
+else:
+    os.makedirs("demo", exist_ok=True)
+    with open("demo/routing.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[csv] wrote demo/routing.csv with {len(rows)} rows")
+PYEOF
+
+sub "demo/lookup_after_shutdown.csv"
+python3 - <<'PYEOF'
+import json, glob, csv, os
+files = sorted(glob.glob("demo/lookup-after-seed-shutdown/lookup-*.json"))
+rows = []
+for f in files:
+    s = json.load(open(f))
+    target = s.get("target", "")
+    finals = s.get("final_contacts") or []
+    found = any(c.get("node_id") == target for c in finals)
+    rows.append({
+        "target": target[:16],
+        "initiator": s.get("initiator", "")[:16],
+        "absent_at_start": s.get("target_absent_at_start", False),
+        "rpc": s.get("rpc", 0),
+        "iterations": s.get("iterations", 0),
+        "timeouts": s.get("timeouts", 0),
+        "duration_ms": s.get("duration_ms", 0),
+        "found": found,
+    })
+if not rows:
+    print("[csv] no lookup-after-shutdown files found")
+else:
+    with open("demo/lookup_after_shutdown.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[csv] wrote demo/lookup_after_shutdown.csv with {len(rows)} rows")
+PYEOF
+
+header "Шаг 8. Сводка"
 echo
 echo "  Артефакты демонстрации:"
 echo "    $DEMO_DIR/"
-echo "      build.log                 — сборка"
-echo "      test.log                  — тесты"
-echo "      identities/               — NodeID'ы всех узлов"
-echo "      star.log                  — запуск star-стенда"
-echo "      collect.log               — сбор routing-снапшотов"
-echo "      check_routing.log         — критерии невырожденности (routing)"
-echo "      check_lookups.log         — критерии невырожденности (lookup)"
-echo "      lookup_after_shutdown.log — lookup после отключения seed"
+echo "      build.log                    — сборка"
+echo "      test.log                     — тесты"
+echo "      identities/                  — NodeID'ы всех узлов"
+echo "      star.log                     — запуск star-стенда"
+echo "      collect.log                  — сбор routing-снапшотов"
+echo "      check_routing.log            — критерии невырожденности (routing)"
+echo "      check_lookups.log            — критерии невырожденности (lookup)"
+echo "      lookup_after_shutdown.log    — lookup после отключения seed"
+echo "      lookups.csv                  — 30 контрольных lookup'ов"
+echo "      routing.csv                  — 20 routing-снапшотов"
+echo "      lookup_after_shutdown.csv    — lookup без seed'а"
 echo "    $METRICS_DIR/"
-echo "      collected/                — routing-снапшоты всех узлов"
-echo "      lookups/                  — результаты 30 lookup'ов"
-echo "    $LOG_DIR/                   — логи узлов"
+echo "      collected/                   — routing-снапшоты всех узлов"
+echo "      lookups/                     — результаты 30 lookup'ов"
+echo "    $LOG_DIR/                      — логи узлов"
 echo
 
 "$ROOT_DIR/scripts/stop_all.sh" >/dev/null 2>&1 || true
