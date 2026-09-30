@@ -37,7 +37,17 @@ node_log() {
 }
 
 clean_all() {
+    pkill -f "$ROOT_DIR/bin/node" 2>/dev/null || true
+    sleep 0.5
+
     rm -rf "$STATE_DIR" "$LOG_DIR" "$METRICS_DIR"
+
+    if [ -d "$METRICS_DIR" ]; then
+        echo "[clean_all] WARNING: $METRICS_DIR still exists, retrying" >&2
+        sleep 1
+        rm -rf "$METRICS_DIR"
+    fi
+
     mkdir -p "$STATE_DIR" "$LOG_DIR" "$METRICS_DIR"
 }
 

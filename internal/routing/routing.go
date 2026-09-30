@@ -6,6 +6,12 @@ import (
 	"sync"
 )
 
+type Observer interface {
+	ContactAdded(peer ID, addr string, bucketIdx int)
+	ContactUpdated(peer ID, addr string, bucketIdx int)
+	ContactRemoved(peer ID, addr string, reason string)
+}
+
 type LivenessChecker interface {
 	IsAlive(c Contact) bool
 }
@@ -16,8 +22,9 @@ type RoutingTable struct {
 	self ID
 	k    int
 
-	mu      sync.RWMutex
-	buckets [IDBits]*bucket
+	mu       sync.RWMutex
+	buckets  [IDBits]*bucket
+	observer Observer
 }
 
 func NewRoutingTable(self ID, k int) *RoutingTable {
@@ -29,6 +36,12 @@ func NewRoutingTable(self ID, k int) *RoutingTable {
 		rt.buckets[i] = newBucket()
 	}
 	return rt
+}
+
+func (rt *RoutingTable) SetObserver(o Observer) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.observer = o
 }
 
 func (rt *RoutingTable) Self() ID { return rt.self }
@@ -74,17 +87,26 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 			return false
 		}
 		b.update(c)
+		if rt.observer != nil {
+			rt.observer.ContactUpdated(c.NodeID, c.Addr(), idx)
+		}
 		return true
 	}
 
 	if b.len() < rt.k {
 		b.appendTail(c)
+		if rt.observer != nil {
+			rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
+		}
 		return true
 	}
 
 	head, ok := b.head()
 	if !ok {
 		b.appendTail(c)
+		if rt.observer != nil {
+			rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
+		}
 		return true
 	}
 
@@ -96,8 +118,13 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 		b.moveToTail(head.NodeID)
 		return false
 	}
+
 	b.removeHead()
 	b.appendTail(c)
+	if rt.observer != nil {
+		rt.observer.ContactRemoved(head.NodeID, head.Addr(), "evicted")
+		rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
+	}
 	return true
 }
 
@@ -113,8 +140,12 @@ func (rt *RoutingTable) Remove(id ID) bool {
 	if i < 0 {
 		return false
 	}
+	removed := b.contacts[i]
 	copy(b.contacts[i:], b.contacts[i+1:])
 	b.contacts = b.contacts[:len(b.contacts)-1]
+	if rt.observer != nil {
+		rt.observer.ContactRemoved(removed.NodeID, removed.Addr(), "removed")
+	}
 	return true
 }
 

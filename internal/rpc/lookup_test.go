@@ -27,7 +27,7 @@ func TestLookup3Nodes(t *testing.T) {
 	}
 
 	tr := tcp.New()
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 
 	result := client.LookupNode(
 		nodes[0].contact,
@@ -56,7 +56,7 @@ func TestLookupTargetAlreadyKnown(t *testing.T) {
 	nodes[0].table.Add(nodes[1].contact, nil)
 
 	tr := tcp.New()
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 	result := client.LookupNode(
 		nodes[0].contact,
 		nodes[0].table,
@@ -82,7 +82,7 @@ func TestLookupLogPopulated(t *testing.T) {
 	nodes[2].table.Add(nodes[3].contact, nil)
 
 	tr := tcp.New()
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 	result := client.LookupNode(
 		nodes[0].contact,
 		nodes[0].table,

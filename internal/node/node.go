@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"p2pnode/internal/config"
+	"p2pnode/internal/events"
 	"p2pnode/internal/identity"
 	"p2pnode/internal/routing"
 	"p2pnode/internal/rpc"
@@ -26,6 +28,8 @@ type Node struct {
 	Server   *rpc.Server
 	Checker  *rpc.PingChecker
 	Listener transport.Listener
+
+	Events *events.Logger
 }
 
 func New(cfg config.Config, log *slog.Logger) (*Node, error) {
@@ -34,6 +38,18 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		return nil, fmt.Errorf("node: identity: %w", err)
 	}
 
+	eventsPath := filepath.Join(cfg.NodeStateDir, "events.jsonl")
+	ev, err := events.NewLogger(eventsPath, id.NodeID.Short())
+	if err != nil {
+		log.Warn("events: logger disabled", "err", err)
+		ev, _ = events.NewLogger("", id.NodeID.Short())
+	}
+
+	ev.Log("identity_loaded", map[string]any{
+		"node_id":   id.NodeID.String(),
+		"state_dir": cfg.NodeStateDir,
+	})
+
 	tr := tcp.NewWithOptions(tcp.Options{
 		ConnectTimeout: cfg.ConnectTimeout,
 		ReadTimeout:    cfg.ReadTimeout,
@@ -41,12 +57,14 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 
 	ln, err := tr.Listen(cfg.ListenAddr())
 	if err != nil {
+		ev.Close()
 		return nil, fmt.Errorf("node: listen %s: %w", cfg.ListenAddr(), err)
 	}
 
 	host, port, err := splitListenAddr(ln.Addr())
 	if err != nil {
 		ln.Close()
+		ev.Close()
 		return nil, fmt.Errorf("node: parse listen addr: %w", err)
 	}
 	if host == "0.0.0.0" || host == "::" || host == "" {
@@ -65,13 +83,19 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 	}
 
 	table := routing.NewRoutingTable(id.NodeID, cfg.KBucketSize)
-	client := rpc.NewClient(tr, log)
+	table.SetObserver(NewRoutingObserver(ev))
+
+	client := rpc.NewClient(tr, log, ev)
 	checker := &rpc.PingChecker{
 		Client:  client,
 		Local:   local,
 		Timeout: cfg.PingTimeout,
 	}
-	srv := rpc.NewServer(local, table, checker, log)
+	srv := rpc.NewServer(local, table, checker, log, ev)
+
+	ev.Log("server_started", map[string]any{
+		"addr": ln.Addr(),
+	})
 
 	return &Node{
 		Config:   cfg,
@@ -83,6 +107,7 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		Server:   srv,
 		Checker:  checker,
 		Listener: ln,
+		Events:   ev,
 	}, nil
 }
 
@@ -91,7 +116,11 @@ func (n *Node) Start() {
 }
 
 func (n *Node) Stop() error {
-	return n.Listener.Close()
+	err := n.Listener.Close()
+	if n.Events != nil {
+		_ = n.Events.Close()
+	}
+	return err
 }
 
 func (n *Node) Bootstrap() error {

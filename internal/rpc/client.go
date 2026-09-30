@@ -7,18 +7,19 @@ import (
 	"log/slog"
 	"time"
 
+	"p2pnode/internal/events"
 	"p2pnode/internal/protocol"
-	"p2pnode/internal/routing"
 	"p2pnode/internal/transport"
 )
 
 type Client struct {
 	tr  transport.Transport
 	log *slog.Logger
+	ev  *events.Logger
 }
 
-func NewClient(tr transport.Transport, log *slog.Logger) *Client {
-	return &Client{tr: tr, log: log}
+func NewClient(tr transport.Transport, log *slog.Logger, ev *events.Logger) *Client {
+	return &Client{tr: tr, log: log, ev: ev}
 }
 
 type callResult struct {
@@ -34,9 +35,17 @@ func (c *Client) Call(addr string, reqType, respType protocol.MsgType, payload [
 
 	conn, err := c.tr.Dial(addr)
 	if err != nil {
+		c.ev.LogPeer("conn_error", "", addr, map[string]any{
+			"phase": "dial",
+			"err":   err.Error(),
+		})
 		return protocol.Frame{}, fmt.Errorf("rpc: dial %s: %w", addr, err)
 	}
 	defer conn.Close()
+
+	c.ev.LogPeer("conn_dialed", "", addr, map[string]any{
+		"remote": conn.RemoteAddr(),
+	})
 
 	reqFrame := protocol.Frame{
 		Version:   protocol.Version,
@@ -45,8 +54,18 @@ func (c *Client) Call(addr string, reqType, respType protocol.MsgType, payload [
 		Payload:   payload,
 	}
 	if err := conn.WriteFrame(reqFrame); err != nil {
+		c.ev.LogPeer("conn_error", "", addr, map[string]any{
+			"phase": "write",
+			"err":   err.Error(),
+		})
 		return protocol.Frame{}, fmt.Errorf("rpc: write: %w", err)
 	}
+
+	c.ev.LogPeer("frame_sent", "", addr, map[string]any{
+		"type":       reqType.String(),
+		"request_id": reqID.String(),
+		"size":       len(payload),
+	})
 
 	ch := make(chan callResult, 1)
 	go func() {
@@ -57,8 +76,17 @@ func (c *Client) Call(addr string, reqType, respType protocol.MsgType, payload [
 	select {
 	case r := <-ch:
 		if r.err != nil {
+			c.ev.LogPeer("conn_error", "", addr, map[string]any{
+				"phase": "read",
+				"err":   r.err.Error(),
+			})
 			return protocol.Frame{}, fmt.Errorf("rpc: read: %w", r.err)
 		}
+		c.ev.LogPeer("frame_recv", "", addr, map[string]any{
+			"type":       r.frame.Type.String(),
+			"request_id": r.frame.RequestID.String(),
+			"size":       len(r.frame.Payload),
+		})
 		if r.frame.Type != respType {
 			return protocol.Frame{}, fmt.Errorf("rpc: unexpected response type %v, want %v",
 				r.frame.Type, respType)
@@ -71,6 +99,9 @@ func (c *Client) Call(addr string, reqType, respType protocol.MsgType, payload [
 
 	case <-time.After(timeout):
 		_ = conn.Close()
+		c.ev.LogPeer("conn_error", "", addr, map[string]any{
+			"phase": "timeout",
+		})
 		return protocol.Frame{}, transport.ErrTimeout
 	}
 }
@@ -86,5 +117,3 @@ func newRequestID() (protocol.RequestID, error) {
 	}
 	return id, nil
 }
-
-var _ = routing.Distance

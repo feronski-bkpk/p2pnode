@@ -35,6 +35,14 @@ func (c *Client) Ping(local routing.Contact, addr string, expectedID *routing.ID
 		return routing.Contact{}, ErrWrongResponder
 	}
 	responder.MarkVerified()
+
+	if expectedID == nil {
+		c.ev.Log("bootstrap_seed", map[string]any{
+			"seed_addr": addr,
+			"seed_id":   responder.NodeID.Short(),
+		})
+	}
+
 	return responder, nil
 }
 

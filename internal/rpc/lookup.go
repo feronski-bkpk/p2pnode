@@ -63,6 +63,11 @@ func (c *Client) LookupNode(
 		},
 	}
 
+	c.ev.Log("lookup_start", map[string]any{
+		"target":    target.Short(),
+		"initiator": local.NodeID.Short(),
+	})
+
 	shortlist := table.Closest(target, cfg.K)
 	queried := make(map[routing.ID]bool)
 
@@ -86,8 +91,10 @@ func (c *Client) LookupNode(
 		}
 
 		iterLog := LookupIteration{Iter: iter}
+		queriedShort := make([]string, 0, len(toQuery))
 		for _, ct := range toQuery {
 			iterLog.Queried = append(iterLog.Queried, contactLog(ct))
+			queriedShort = append(queriedShort, ct.NodeID.Short())
 		}
 
 		type reply struct {
@@ -141,6 +148,14 @@ func (c *Client) LookupNode(
 		result.Iterations++
 		result.Log.Iterations = append(result.Log.Iterations, iterLog)
 
+		c.ev.Log("lookup_iter", map[string]any{
+			"lookup_target": target.Short(),
+			"iter":          iter,
+			"queried":       queriedShort,
+			"rpc":           result.RPC,
+			"found_target":  foundTarget,
+		})
+
 		if foundTarget {
 			break
 		}
@@ -163,6 +178,24 @@ func (c *Client) LookupNode(
 	for _, ct := range shortlist {
 		result.Log.FinalContacts = append(result.Log.FinalContacts, contactLog(ct))
 	}
+
+	foundTarget := false
+	for _, ct := range shortlist {
+		if ct.NodeID == target {
+			foundTarget = true
+			break
+		}
+	}
+
+	c.ev.Log("lookup_done", map[string]any{
+		"lookup_target": target.Short(),
+		"rpc":           result.RPC,
+		"iterations":    result.Iterations,
+		"timeouts":      result.Timeouts,
+		"duration_ms":   result.Duration.Milliseconds(),
+		"found_target":  foundTarget,
+	})
+
 	return result
 }
 

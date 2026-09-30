@@ -63,7 +63,7 @@ func newTestNetwork(t *testing.T, n, k int) []*testNode {
 
 		c := makeLocalContact(t, host, uint16(p))
 		table := routing.NewRoutingTable(c.NodeID, k)
-		srv := NewServer(c, table, nil, log)
+		srv := NewServer(c, table, nil, log, nil)
 
 		tn := &testNode{contact: c, table: table, ln: ln, server: srv}
 		nodes = append(nodes, tn)
@@ -81,7 +81,7 @@ func newTestNetwork(t *testing.T, n, k int) []*testNode {
 func TestPingRoundTrip(t *testing.T) {
 	nodes := newTestNetwork(t, 2, 4)
 	tr := tcp.New()
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 
 	expected := nodes[1].contact.NodeID
 	responder, err := client.Ping(nodes[0].contact, nodes[1].contact.Addr(), &expected, 2*time.Second)
@@ -96,7 +96,7 @@ func TestPingRoundTrip(t *testing.T) {
 func TestPingWithoutExpectedID(t *testing.T) {
 	nodes := newTestNetwork(t, 2, 4)
 	tr := tcp.New()
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 
 	responder, err := client.Ping(nodes[0].contact, nodes[1].contact.Addr(), nil, 2*time.Second)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestPingWithoutExpectedID(t *testing.T) {
 func TestPingTimeout(t *testing.T) {
 	nodes := newTestNetwork(t, 1, 4)
 	tr := tcp.New()
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 
 	_, err := client.Ping(nodes[0].contact, "127.0.0.1:1", nil, 300*time.Millisecond)
 	if err == nil {
@@ -149,7 +149,7 @@ func TestRequestIDMismatch(t *testing.T) {
 		})
 	}()
 
-	client := NewClient(tr, discardLog())
+	client := NewClient(tr, discardLog(), nil)
 	host, portStr, _ := net.SplitHostPort(ln.Addr())
 	p, _ := strconv.Atoi(portStr)
 	target := makeLocalContact(t, host, uint16(p))
