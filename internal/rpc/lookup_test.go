@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"p2pnode/internal/routing"
 	"p2pnode/internal/transport/tcp"
 )
 
@@ -27,7 +26,7 @@ func TestLookup3Nodes(t *testing.T) {
 	}
 
 	tr := tcp.New()
-	client := NewClient(tr, discardLog(), nil)
+	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 
 	result := client.LookupNode(
 		nodes[0].contact,
@@ -56,7 +55,7 @@ func TestLookupTargetAlreadyKnown(t *testing.T) {
 	nodes[0].table.Add(nodes[1].contact, nil)
 
 	tr := tcp.New()
-	client := NewClient(tr, discardLog(), nil)
+	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 	result := client.LookupNode(
 		nodes[0].contact,
 		nodes[0].table,
@@ -82,7 +81,7 @@ func TestLookupLogPopulated(t *testing.T) {
 	nodes[2].table.Add(nodes[3].contact, nil)
 
 	tr := tcp.New()
-	client := NewClient(tr, discardLog(), nil)
+	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 	result := client.LookupNode(
 		nodes[0].contact,
 		nodes[0].table,
@@ -102,5 +101,4 @@ func TestLookupLogPopulated(t *testing.T) {
 	if len(result.Log.FinalContacts) == 0 {
 		t.Fatal("log final contacts empty")
 	}
-	_ = routing.IDBits
 }

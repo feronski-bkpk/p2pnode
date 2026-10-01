@@ -96,14 +96,14 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 	table := routing.NewRoutingTable(id.NodeID, cfg.KBucketSize)
 	table.SetObserver(NewRoutingObserver(ev))
 
-	client := rpc.NewClient(tr, log, ev)
+	client := rpc.NewClient(tr, log, ev, id)
 	checker := &rpc.PingChecker{
 		Client:  client,
 		Local:   local,
 		Timeout: cfg.PingTimeout,
 	}
 	st := store.New()
-	srv := rpc.NewServer(local, table, st, checker, log, ev)
+	srv := rpc.NewServer(local, id, table, st, checker, log, ev)
 
 	ev.Log("server_started", map[string]any{
 		"addr": ln.Addr(),

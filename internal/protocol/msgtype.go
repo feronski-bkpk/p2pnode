@@ -17,6 +17,10 @@ const (
 	MsgFindValueRequest  MsgType = 0x07
 	MsgFindValueResponse MsgType = 0x08
 
+	MsgHandshakeHello   MsgType = 0x09
+	MsgHandshakeReply   MsgType = 0x0A
+	MsgHandshakeConfirm MsgType = 0x0B
+
 	MsgError MsgType = 0x7F
 )
 
@@ -38,6 +42,12 @@ func (t MsgType) String() string {
 		return "FIND_VALUE_REQUEST"
 	case MsgFindValueResponse:
 		return "FIND_VALUE_RESPONSE"
+	case MsgHandshakeHello:
+		return "HANDSHAKE_HELLO"
+	case MsgHandshakeReply:
+		return "HANDSHAKE_REPLY"
+	case MsgHandshakeConfirm:
+		return "HANDSHAKE_CONFIRM"
 	case MsgError:
 		return "ERROR"
 	default:
@@ -47,7 +57,8 @@ func (t MsgType) String() string {
 
 func (t MsgType) IsRequest() bool {
 	switch t {
-	case MsgPing, MsgFindNodeRequest, MsgStoreRequest, MsgFindValueRequest:
+	case MsgPing, MsgFindNodeRequest, MsgStoreRequest, MsgFindValueRequest,
+		MsgHandshakeHello, MsgHandshakeReply, MsgHandshakeConfirm:
 		return true
 	}
 	return false

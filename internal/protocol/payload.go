@@ -76,6 +76,18 @@ type FindValueResponsePayload struct {
 	Nodes []Contact `msgpack:"nodes,omitempty"`
 }
 
+type HandshakeHelloPayload struct {
+	Body []byte `msgpack:"body"`
+}
+
+type HandshakeReplyPayload struct {
+	Body []byte `msgpack:"body"`
+}
+
+type HandshakeConfirmPayload struct {
+	Body []byte `msgpack:"body"`
+}
+
 type ErrorPayload struct {
 	Code    string `msgpack:"code"`
 	Message string `msgpack:"message"`

@@ -129,6 +129,7 @@ func isKnownType(t MsgType) bool {
 		MsgFindNodeRequest, MsgFindNodeResponse,
 		MsgStoreRequest, MsgStoreResponse,
 		MsgFindValueRequest, MsgFindValueResponse,
+		MsgHandshakeHello, MsgHandshakeReply, MsgHandshakeConfirm,
 		MsgError:
 		return true
 	}

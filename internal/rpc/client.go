@@ -8,107 +8,93 @@ import (
 	"time"
 
 	"p2pnode/internal/events"
+	"p2pnode/internal/identity"
 	"p2pnode/internal/protocol"
 	"p2pnode/internal/transport"
 )
 
 type Client struct {
-	tr  transport.Transport
-	log *slog.Logger
-	ev  *events.Logger
+	tr    transport.Transport
+	log   *slog.Logger
+	ev    *events.Logger
+	local *identity.Identity
 }
 
-func NewClient(tr transport.Transport, log *slog.Logger, ev *events.Logger) *Client {
-	return &Client{tr: tr, log: log, ev: ev}
+func NewClient(tr transport.Transport, log *slog.Logger, ev *events.Logger, local *identity.Identity) *Client {
+	return &Client{tr: tr, log: log, ev: ev, local: local}
 }
 
-type callResult struct {
-	frame protocol.Frame
-	err   error
-}
+func (c *Client) Call(
+	addr string,
+	reqType, respType protocol.MsgType,
+	payload []byte,
+	timeout time.Duration,
+) (protocol.Frame, error) {
+	secure, err := c.Handshake(addr, nil)
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("rpc: handshake: %w", err)
+	}
+	defer secure.Close()
 
-func (c *Client) Call(addr string, reqType, respType protocol.MsgType, payload []byte, timeout time.Duration) (protocol.Frame, error) {
 	reqID, err := newRequestID()
 	if err != nil {
 		return protocol.Frame{}, fmt.Errorf("rpc: request id: %w", err)
-	}
-
-	conn, err := c.tr.Dial(addr)
-	if err != nil {
-		c.ev.LogPeer("conn_error", "", addr, map[string]any{
-			"phase": "dial",
-			"err":   err.Error(),
-		})
-		return protocol.Frame{}, fmt.Errorf("rpc: dial %s: %w", addr, err)
-	}
-	defer conn.Close()
-
-	c.ev.LogPeer("conn_dialed", "", addr, map[string]any{
-		"remote": conn.RemoteAddr(),
-	})
-
-	reqFrame := protocol.Frame{
-		Version:   protocol.Version,
-		Type:      reqType,
-		RequestID: reqID,
-		Payload:   payload,
-	}
-	if err := conn.WriteFrame(reqFrame); err != nil {
-		c.ev.LogPeer("conn_error", "", addr, map[string]any{
-			"phase": "write",
-			"err":   err.Error(),
-		})
-		return protocol.Frame{}, fmt.Errorf("rpc: write: %w", err)
 	}
 
 	c.ev.LogPeer("frame_sent", "", addr, map[string]any{
 		"type":       reqType.String(),
 		"request_id": reqID.String(),
 		"size":       len(payload),
+		"encrypted":  true,
 	})
 
-	ch := make(chan callResult, 1)
+	if err := secure.WriteFrame(protocol.Frame{
+		Version:   protocol.Version,
+		Type:      reqType,
+		RequestID: reqID,
+		Payload:   payload,
+	}); err != nil {
+		return protocol.Frame{}, fmt.Errorf("rpc: write: %w", err)
+	}
+
+	type result struct {
+		f   protocol.Frame
+		err error
+	}
+	ch := make(chan result, 1)
 	go func() {
-		f, err := conn.ReadFrame()
-		ch <- callResult{f, err}
+		f, err := secure.ReadFrame()
+		ch <- result{f, err}
 	}()
 
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			c.ev.LogPeer("conn_error", "", addr, map[string]any{
-				"phase": "read",
-				"err":   r.err.Error(),
-			})
 			return protocol.Frame{}, fmt.Errorf("rpc: read: %w", r.err)
 		}
 		c.ev.LogPeer("frame_recv", "", addr, map[string]any{
-			"type":       r.frame.Type.String(),
-			"request_id": r.frame.RequestID.String(),
-			"size":       len(r.frame.Payload),
+			"type":       r.f.Type.String(),
+			"request_id": r.f.RequestID.String(),
+			"size":       len(r.f.Payload),
+			"encrypted":  true,
 		})
-		if r.frame.Type != respType {
+		if r.f.Type != respType {
 			return protocol.Frame{}, fmt.Errorf("rpc: unexpected response type %v, want %v",
-				r.frame.Type, respType)
+				r.f.Type, respType)
 		}
-		if r.frame.RequestID != reqID {
+		if r.f.RequestID != reqID {
 			return protocol.Frame{}, fmt.Errorf("%w: got %s, want %s",
-				ErrRequestIDMismatch, r.frame.RequestID, reqID)
+				ErrRequestIDMismatch, r.f.RequestID, reqID)
 		}
-		return r.frame, nil
+		return r.f, nil
 
 	case <-time.After(timeout):
-		_ = conn.Close()
-		c.ev.LogPeer("conn_error", "", addr, map[string]any{
-			"phase": "timeout",
-		})
+		_ = secure.Close()
 		return protocol.Frame{}, transport.ErrTimeout
 	}
 }
 
-var (
-	ErrRequestIDMismatch = errors.New("rpc: request_id mismatch")
-)
+var ErrRequestIDMismatch = errors.New("rpc: request_id mismatch")
 
 func newRequestID() (protocol.RequestID, error) {
 	var id protocol.RequestID

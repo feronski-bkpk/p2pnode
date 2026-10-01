@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"p2pnode/internal/events"
+	"p2pnode/internal/identity"
 	"p2pnode/internal/protocol"
 	"p2pnode/internal/routing"
 	"p2pnode/internal/store"
@@ -13,18 +14,20 @@ import (
 )
 
 type Server struct {
-	Local   routing.Contact
-	Table   *routing.RoutingTable
-	Store   *store.Store
-	Checker routing.LivenessChecker
-	Log     *slog.Logger
-	Ev      *events.Logger
+	Local    routing.Contact
+	Identity *identity.Identity
+	Table    *routing.RoutingTable
+	Store    *store.Store
+	Checker  routing.LivenessChecker
+	Log      *slog.Logger
+	Ev       *events.Logger
 
 	ln transport.Listener
 }
 
 func NewServer(
 	local routing.Contact,
+	id *identity.Identity,
 	table *routing.RoutingTable,
 	st *store.Store,
 	checker routing.LivenessChecker,
@@ -32,12 +35,13 @@ func NewServer(
 	ev *events.Logger,
 ) *Server {
 	return &Server{
-		Local:   local,
-		Table:   table,
-		Store:   st,
-		Checker: checker,
-		Log:     log,
-		Ev:      ev,
+		Local:    local,
+		Identity: id,
+		Table:    table,
+		Store:    st,
+		Checker:  checker,
+		Log:      log,
+		Ev:       ev,
 	}
 }
 
@@ -63,22 +67,49 @@ func (s *Server) handleConn(conn transport.Conn) {
 		s.Ev.LogPeer("conn_closed", "", conn.RemoteAddr(), nil)
 	}()
 
+	helloFrame, err := conn.ReadFrame()
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			s.Log.Debug("rpc: first read failed", "remote", conn.RemoteAddr(), "err", err)
+		}
+		return
+	}
+
+	if helloFrame.Type != protocol.MsgHandshakeHello {
+		s.Log.Warn("rpc: expected handshake hello",
+			"remote", conn.RemoteAddr(),
+			"got", helloFrame.Type.String())
+		_ = writeError(conn, helloFrame.RequestID, "EXPECTED_HANDSHAKE",
+			"first frame must be HANDSHAKE_HELLO")
+		return
+	}
+
+	s.Ev.LogPeer("handshake_start", "", conn.RemoteAddr(), nil)
+
+	secure, peerID, err := s.handleHandshake(conn, helloFrame)
+	if err != nil {
+		s.Log.Warn("rpc: handshake failed", "remote", conn.RemoteAddr(), "err", err)
+		s.Ev.LogPeer("handshake_failed", "", conn.RemoteAddr(), map[string]any{"err": err.Error()})
+		return
+	}
+	defer secure.Close()
+
+	peerIDShort := fmtShortID(peerID)
+
 	for {
-		frame, err := conn.ReadFrame()
+		frame, err := secure.ReadFrame()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				s.Log.Debug("rpc: conn read end", "remote", conn.RemoteAddr(), "err", err)
+				s.Log.Debug("rpc: secure read end", "remote", secure.RemoteAddr(), "err", err)
 			}
 			return
 		}
-
-		s.Ev.LogPeer("frame_recv", "", conn.RemoteAddr(), map[string]any{
+		s.Ev.LogPeer("frame_recv", peerIDShort, secure.RemoteAddr(), map[string]any{
 			"type":       frame.Type.String(),
 			"request_id": frame.RequestID.String(),
 			"size":       len(frame.Payload),
 		})
-
-		s.dispatch(conn, frame)
+		s.dispatch(secure, frame)
 	}
 }
 
@@ -124,4 +155,14 @@ func writeError(conn transport.Conn, reqID protocol.RequestID, code, msg string)
 		RequestID: reqID,
 		Payload:   payload,
 	})
+}
+
+func fmtShortID(id [32]byte) string {
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, 8)
+	for i := 0; i < 4; i++ {
+		out[i*2] = hexdigits[id[i]>>4]
+		out[i*2+1] = hexdigits[id[i]&0x0F]
+	}
+	return string(out)
 }
