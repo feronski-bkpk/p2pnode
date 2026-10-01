@@ -63,7 +63,7 @@ func newTestNetwork(t *testing.T, n, k int) []*testNode {
 
 		c := makeLocalContact(t, host, uint16(p))
 		table := routing.NewRoutingTable(c.NodeID, k)
-		srv := NewServer(c, table, nil, log, nil)
+		srv := NewServer(c, table, nil, nil, log, nil)
 
 		tn := &testNode{contact: c, table: table, ln: ln, server: srv}
 		nodes = append(nodes, tn)

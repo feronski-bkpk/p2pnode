@@ -53,6 +53,29 @@ type FindNodeResponsePayload struct {
 	Contacts     []Contact `msgpack:"contacts"`
 }
 
+type StoreRequestPayload struct {
+	Sender Contact  `msgpack:"sender"`
+	Key    [32]byte `msgpack:"key"`
+	Value  []byte   `msgpack:"value"`
+	TTLSec int64    `msgpack:"ttl_sec"`
+}
+
+type StoreResponsePayload struct {
+	OK      bool   `msgpack:"ok"`
+	Message string `msgpack:"message,omitempty"`
+}
+
+type FindValueRequestPayload struct {
+	Sender Contact  `msgpack:"sender"`
+	Key    [32]byte `msgpack:"key"`
+}
+
+type FindValueResponsePayload struct {
+	Found bool      `msgpack:"found"`
+	Value []byte    `msgpack:"value,omitempty"`
+	Nodes []Contact `msgpack:"nodes,omitempty"`
+}
+
 type ErrorPayload struct {
 	Code    string `msgpack:"code"`
 	Message string `msgpack:"message"`

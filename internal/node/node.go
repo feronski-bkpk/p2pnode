@@ -1,11 +1,13 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"p2pnode/internal/config"
@@ -13,6 +15,7 @@ import (
 	"p2pnode/internal/identity"
 	"p2pnode/internal/routing"
 	"p2pnode/internal/rpc"
+	"p2pnode/internal/store"
 	"p2pnode/internal/transport"
 	"p2pnode/internal/transport/tcp"
 )
@@ -24,12 +27,20 @@ type Node struct {
 	Local    routing.Contact
 
 	Table    *routing.RoutingTable
+	Store    *store.Store
 	Client   *rpc.Client
 	Server   *rpc.Server
 	Checker  *rpc.PingChecker
 	Listener transport.Listener
 
 	Events *events.Logger
+
+	ExpireInterval    time.Duration
+	RepublishInterval time.Duration
+
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup
 }
 
 func New(cfg config.Config, log *slog.Logger) (*Node, error) {
@@ -91,23 +102,27 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		Local:   local,
 		Timeout: cfg.PingTimeout,
 	}
-	srv := rpc.NewServer(local, table, checker, log, ev)
+	st := store.New()
+	srv := rpc.NewServer(local, table, st, checker, log, ev)
 
 	ev.Log("server_started", map[string]any{
 		"addr": ln.Addr(),
 	})
 
 	return &Node{
-		Config:   cfg,
-		Log:      log,
-		Identity: id,
-		Local:    local,
-		Table:    table,
-		Client:   client,
-		Server:   srv,
-		Checker:  checker,
-		Listener: ln,
-		Events:   ev,
+		Config:            cfg,
+		Log:               log,
+		Identity:          id,
+		Local:             local,
+		Table:             table,
+		Store:             st,
+		Client:            client,
+		Server:            srv,
+		Checker:           checker,
+		Listener:          ln,
+		Events:            ev,
+		ExpireInterval:    ExpireInterval,
+		RepublishInterval: RepublishInterval,
 	}, nil
 }
 
@@ -117,6 +132,7 @@ func (n *Node) Start() {
 
 func (n *Node) Stop() error {
 	err := n.Listener.Close()
+	n.stopBackgroundTasks()
 	if n.Events != nil {
 		_ = n.Events.Close()
 	}

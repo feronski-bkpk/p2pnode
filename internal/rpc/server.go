@@ -8,12 +8,14 @@ import (
 	"p2pnode/internal/events"
 	"p2pnode/internal/protocol"
 	"p2pnode/internal/routing"
+	"p2pnode/internal/store"
 	"p2pnode/internal/transport"
 )
 
 type Server struct {
 	Local   routing.Contact
 	Table   *routing.RoutingTable
+	Store   *store.Store
 	Checker routing.LivenessChecker
 	Log     *slog.Logger
 	Ev      *events.Logger
@@ -21,11 +23,18 @@ type Server struct {
 	ln transport.Listener
 }
 
-func NewServer(local routing.Contact, table *routing.RoutingTable,
-	checker routing.LivenessChecker, log *slog.Logger, ev *events.Logger) *Server {
+func NewServer(
+	local routing.Contact,
+	table *routing.RoutingTable,
+	st *store.Store,
+	checker routing.LivenessChecker,
+	log *slog.Logger,
+	ev *events.Logger,
+) *Server {
 	return &Server{
 		Local:   local,
 		Table:   table,
+		Store:   st,
 		Checker: checker,
 		Log:     log,
 		Ev:      ev,
@@ -80,6 +89,10 @@ func (s *Server) dispatch(conn transport.Conn, frame protocol.Frame) {
 		err = HandlePing(s.Local, s.Table, s.Checker, conn, frame)
 	case protocol.MsgFindNodeRequest:
 		err = HandleFindNode(s.Local, s.Table, s.Checker, conn, frame)
+	case protocol.MsgStoreRequest:
+		err = HandleStore(s.Local, s.Table, s.Store, s.Checker, conn, frame, s.Ev)
+	case protocol.MsgFindValueRequest:
+		err = HandleFindValue(s.Local, s.Table, s.Store, s.Checker, conn, frame, s.Ev)
 	default:
 		_ = writeError(conn, frame.RequestID, "UNKNOWN_TYPE", frame.Type.String())
 		s.Ev.LogPeer("handler_error", "", conn.RemoteAddr(), map[string]any{

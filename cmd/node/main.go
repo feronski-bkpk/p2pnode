@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,8 +15,10 @@ import (
 	"p2pnode/internal/config"
 	"p2pnode/internal/metrics"
 	"p2pnode/internal/node"
+	"p2pnode/internal/record"
 	"p2pnode/internal/routing"
 	"p2pnode/internal/rpc"
+	"p2pnode/internal/store"
 )
 
 func main() {
@@ -44,6 +48,26 @@ func main() {
 		log.Warn("bootstrap error", "err", err)
 	}
 	log.Info("bootstrap complete", "table_size", n.Table.Size())
+
+	n.StartBackgroundTasks()
+
+	if cfg.PublishSelf || cfg.PublishAlias != "" {
+		if err := publishRecords(cfg, n, log); err != nil {
+			log.Error("publish", "err", err)
+		}
+	}
+
+	if cfg.FindNodeID != "" {
+		if err := findRecordByID(cfg, n, log); err != nil {
+			log.Error("find node", "err", err)
+		}
+	}
+
+	if cfg.FindAlias != "" {
+		if err := findRecordByAlias(cfg, n, log); err != nil {
+			log.Error("find alias", "err", err)
+		}
+	}
 
 	if cfg.ExportDir != "" {
 		if err := exportMetrics(cfg, n, log); err != nil {
@@ -176,4 +200,90 @@ func newLogger(level string) *slog.Logger {
 	}
 	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})
 	return slog.New(h)
+}
+
+func publishRecords(cfg config.Config, n *node.Node, log *slog.Logger) error {
+	addr := n.Listener.Addr()
+
+	rec, err := record.New(n.Identity.PrivateKey, []string{addr}, node.DefaultRecordTTL, 1)
+	if err != nil {
+		return fmt.Errorf("record.New: %w", err)
+	}
+
+	if cfg.PublishAlias != "" {
+		rec.Alias = cfg.PublishAlias
+		if err := rec.Sign(n.Identity.PrivateKey); err != nil {
+			return fmt.Errorf("sign after alias: %w", err)
+		}
+	}
+
+	result, err := n.Publish(rec, node.DefaultRecordTTL)
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+
+	log.Info("published",
+		"node_id", rec.NodeID.Short(),
+		"alias", rec.Alias,
+		"key", result.Key.Short(),
+		"replicas", result.Replicas,
+		"local", result.LocalStored,
+		"duration_ms", result.Duration.Milliseconds(),
+	)
+	return nil
+}
+
+func findRecordByID(cfg config.Config, n *node.Node, log *slog.Logger) error {
+	id, err := record.IDFromHex(cfg.FindNodeID)
+	if err != nil {
+		return fmt.Errorf("parse find-node-id: %w", err)
+	}
+	key := node.NodeKeyForID(id)
+	return doFindValue(n, key, log, "node_id="+id.Short())
+}
+
+func findRecordByAlias(cfg config.Config, n *node.Node, log *slog.Logger) error {
+	key := node.AliasKeyForName(cfg.FindAlias)
+	return doFindValue(n, key, log, "alias="+cfg.FindAlias)
+}
+
+func doFindValue(n *node.Node, key store.ID, log *slog.Logger, label string) error {
+	start := time.Now()
+	rec, err := n.FindValue(key)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		log.Warn("findvalue: not found",
+			"label", label,
+			"key", key.Short(),
+			"duration_ms", elapsed.Milliseconds(),
+			"err", err)
+		return err
+	}
+
+	log.Info("findvalue: found",
+		"label", label,
+		"key", key.Short(),
+		"node_id", rec.NodeID.Short(),
+		"alias", rec.Alias,
+		"addresses", rec.Addresses,
+		"seq", rec.SequenceNumber,
+		"issued_at", rec.IssuedAt.Format(time.RFC3339),
+		"expires_at", rec.ExpiresAt.Format(time.RFC3339),
+		"duration_ms", elapsed.Milliseconds(),
+	)
+
+	out := map[string]any{
+		"node_id":         rec.NodeID.String(),
+		"alias":           rec.Alias,
+		"addresses":       rec.Addresses,
+		"sequence_number": rec.SequenceNumber,
+		"issued_at":       rec.IssuedAt.Unix(),
+		"expires_at":      rec.ExpiresAt.Unix(),
+		"duration_ms":     elapsed.Milliseconds(),
+	}
+	buf, _ := json.Marshal(out)
+	fmt.Println(string(buf))
+
+	return nil
 }

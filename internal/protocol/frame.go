@@ -125,7 +125,11 @@ func ReadFrame(r io.Reader) (Frame, error) {
 
 func isKnownType(t MsgType) bool {
 	switch t {
-	case MsgPing, MsgPong, MsgFindNodeRequest, MsgFindNodeResponse, MsgError:
+	case MsgPing, MsgPong,
+		MsgFindNodeRequest, MsgFindNodeResponse,
+		MsgStoreRequest, MsgStoreResponse,
+		MsgFindValueRequest, MsgFindValueResponse,
+		MsgError:
 		return true
 	}
 	return false

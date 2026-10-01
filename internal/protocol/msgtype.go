@@ -12,6 +12,11 @@ const (
 	MsgFindNodeRequest  MsgType = 0x03
 	MsgFindNodeResponse MsgType = 0x04
 
+	MsgStoreRequest      MsgType = 0x05
+	MsgStoreResponse     MsgType = 0x06
+	MsgFindValueRequest  MsgType = 0x07
+	MsgFindValueResponse MsgType = 0x08
+
 	MsgError MsgType = 0x7F
 )
 
@@ -25,6 +30,14 @@ func (t MsgType) String() string {
 		return "FIND_NODE_REQUEST"
 	case MsgFindNodeResponse:
 		return "FIND_NODE_RESPONSE"
+	case MsgStoreRequest:
+		return "STORE_REQUEST"
+	case MsgStoreResponse:
+		return "STORE_RESPONSE"
+	case MsgFindValueRequest:
+		return "FIND_VALUE_REQUEST"
+	case MsgFindValueResponse:
+		return "FIND_VALUE_RESPONSE"
 	case MsgError:
 		return "ERROR"
 	default:
@@ -34,7 +47,7 @@ func (t MsgType) String() string {
 
 func (t MsgType) IsRequest() bool {
 	switch t {
-	case MsgPing, MsgFindNodeRequest:
+	case MsgPing, MsgFindNodeRequest, MsgStoreRequest, MsgFindValueRequest:
 		return true
 	}
 	return false
@@ -42,7 +55,7 @@ func (t MsgType) IsRequest() bool {
 
 func (t MsgType) IsResponse() bool {
 	switch t {
-	case MsgPong, MsgFindNodeResponse:
+	case MsgPong, MsgFindNodeResponse, MsgStoreResponse, MsgFindValueResponse:
 		return true
 	}
 	return false

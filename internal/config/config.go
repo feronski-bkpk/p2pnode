@@ -44,6 +44,11 @@ type Config struct {
 	DumpRouting      bool          `yaml:"dump_routing"`
 	LookupTarget     string        `yaml:"lookup_target"`
 
+	PublishSelf  bool   `yaml:"publish_self"`
+	FindNodeID   string `yaml:"find_node_id"`
+	PublishAlias string `yaml:"publish_alias"`
+	FindAlias    string `yaml:"find_alias"`
+
 	source string
 }
 
@@ -71,6 +76,10 @@ func Default() Config {
 		ExportIntervalMs: 0,
 		DumpRouting:      false,
 		LookupTarget:     "",
+		PublishSelf:      false,
+		FindNodeID:       "",
+		PublishAlias:     "",
+		FindAlias:        "",
 		source:           "defaults",
 	}
 }
@@ -94,6 +103,10 @@ type yamlConfig struct {
 	ExportIntervalMs int      `yaml:"export_interval_ms"`
 	DumpRouting      bool     `yaml:"dump_routing"`
 	LookupTarget     string   `yaml:"lookup_target"`
+	PublishSelf      bool     `yaml:"publish_self"`
+	FindNodeID       string   `yaml:"find_node_id"`
+	PublishAlias     string   `yaml:"publish_alias"`
+	FindAlias        string   `yaml:"find_alias"`
 }
 
 func (c *Config) LoadFromFile(path string) error {
@@ -161,6 +174,16 @@ func (c *Config) LoadFromFile(path string) error {
 	if y.LookupTarget != "" {
 		c.LookupTarget = y.LookupTarget
 	}
+	c.PublishSelf = y.PublishSelf
+	if y.FindNodeID != "" {
+		c.FindNodeID = y.FindNodeID
+	}
+	if y.PublishAlias != "" {
+		c.PublishAlias = y.PublishAlias
+	}
+	if y.FindAlias != "" {
+		c.FindAlias = y.FindAlias
+	}
 
 	c.source = path
 	return nil
@@ -201,6 +224,10 @@ func Load(args []string) (Config, error) {
 		exportMs       = fs.Int("export-interval-ms", envInt("EXPORT_INTERVAL_MS", int(cfg.ExportInterval.Milliseconds())), "интервал выгрузки, мс")
 		dumpRouting    = fs.Bool("dump-routing", envBool("DUMP_ROUTING", cfg.DumpRouting), "выгрузить таблицу и выйти")
 		lookupTarget   = fs.String("lookup-target", envStr("LOOKUP_TARGET", cfg.LookupTarget), "hex NodeID для контрольного lookup")
+		publishSelf    = fs.Bool("publish-self", envBool("PUBLISH_SELF", cfg.PublishSelf), "опубликовать свою NodeRecord в DHT")
+		findNodeID     = fs.String("find-node-id", envStr("FIND_NODE_ID", cfg.FindNodeID), "hex NodeID для поиска записи")
+		publishAlias   = fs.String("publish-alias", envStr("PUBLISH_ALIAS", cfg.PublishAlias), "псевдоним для публикации")
+		findAlias      = fs.String("find-alias", envStr("FIND_ALIAS", cfg.FindAlias), "псевдоним для поиска")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -226,6 +253,10 @@ func Load(args []string) (Config, error) {
 	cfg.ExportIntervalMs = *exportMs
 	cfg.DumpRouting = *dumpRouting
 	cfg.LookupTarget = *lookupTarget
+	cfg.PublishSelf = *publishSelf
+	cfg.FindNodeID = *findNodeID
+	cfg.PublishAlias = *publishAlias
+	cfg.FindAlias = *findAlias
 
 	if *bootstrap != "" {
 		cfg.BootstrapPeers = nil
