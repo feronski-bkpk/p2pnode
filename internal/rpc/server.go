@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"time"
 
 	"p2pnode/internal/events"
 	"p2pnode/internal/identity"
@@ -21,6 +22,8 @@ type Server struct {
 	Checker  routing.LivenessChecker
 	Log      *slog.Logger
 	Ev       *events.Logger
+
+	TunnelHandler func(conn transport.Conn, frame protocol.Frame) error
 
 	ln transport.Listener
 }
@@ -62,31 +65,66 @@ func (s *Server) Serve(ln transport.Listener) {
 }
 
 func (s *Server) handleConn(conn transport.Conn) {
-	defer conn.Close()
 	defer func() {
 		s.Ev.LogPeer("conn_closed", "", conn.RemoteAddr(), nil)
 	}()
 
-	helloFrame, err := conn.ReadFrame()
+	firstFrame, err := conn.ReadFrame()
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			s.Log.Debug("rpc: first read failed", "remote", conn.RemoteAddr(), "err", err)
 		}
+		_ = conn.Close()
 		return
 	}
 
-	if helloFrame.Type != protocol.MsgHandshakeHello {
+	switch firstFrame.Type {
+	case protocol.MsgTunnelBuild, protocol.MsgTunnelData,
+		protocol.MsgTunnelBuildOK, protocol.MsgTunnelBuildFail,
+		protocol.MsgTunnelBuildAck, protocol.MsgTunnelAck,
+		protocol.MsgTunnelClose:
+
+		if sc, ok := conn.(interface{ SetReadTimeout(time.Duration) }); ok {
+			sc.SetReadTimeout(0)
+			s.Log.Debug("rpc: tunnel conn read timeout disabled",
+				"remote", conn.RemoteAddr(),
+				"type", firstFrame.Type.String())
+		}
+
+		if s.TunnelHandler == nil {
+			s.Log.Warn("rpc: tunnel handler not set",
+				"remote", conn.RemoteAddr(),
+				"type", firstFrame.Type.String())
+			_ = writeError(conn, firstFrame.RequestID, "TUNNEL_UNSUPPORTED",
+				"tunnel handler not set")
+			_ = conn.Close()
+			return
+		}
+
+		if err := s.TunnelHandler(conn, firstFrame); err != nil {
+			s.Log.Debug("rpc: tunnel handler error",
+				"remote", conn.RemoteAddr(),
+				"type", firstFrame.Type.String(),
+				"err", err)
+			_ = conn.Close()
+		}
+		return
+	}
+
+	defer conn.Close()
+
+	if firstFrame.Type != protocol.MsgHandshakeHello {
 		s.Log.Warn("rpc: expected handshake hello",
 			"remote", conn.RemoteAddr(),
-			"got", helloFrame.Type.String())
-		_ = writeError(conn, helloFrame.RequestID, "EXPECTED_HANDSHAKE",
+			"got", firstFrame.Type.String())
+		_ = writeError(conn, firstFrame.RequestID, "EXPECTED_HANDSHAKE",
 			"first frame must be HANDSHAKE_HELLO")
 		return
 	}
 
 	s.Ev.LogPeer("handshake_start", "", conn.RemoteAddr(), nil)
 
-	secure, peerID, err := s.handleHandshake(conn, helloFrame)
+	secure, peerID, err := s.handleHandshake(conn, firstFrame)
 	if err != nil {
 		s.Log.Warn("rpc: handshake failed", "remote", conn.RemoteAddr(), "err", err)
 		s.Ev.LogPeer("handshake_failed", "", conn.RemoteAddr(), map[string]any{"err": err.Error()})

@@ -130,6 +130,9 @@ func isKnownType(t MsgType) bool {
 		MsgStoreRequest, MsgStoreResponse,
 		MsgFindValueRequest, MsgFindValueResponse,
 		MsgHandshakeHello, MsgHandshakeReply, MsgHandshakeConfirm,
+		MsgTunnelBuild, MsgTunnelBuildOK, MsgTunnelBuildFail,
+		MsgTunnelBuildAck,
+		MsgTunnelData, MsgTunnelAck, MsgTunnelClose,
 		MsgError:
 		return true
 	}

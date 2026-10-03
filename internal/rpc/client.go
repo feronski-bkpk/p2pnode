@@ -103,3 +103,7 @@ func newRequestID() (protocol.RequestID, error) {
 	}
 	return id, nil
 }
+
+func (c *Client) DialRaw(addr string) (transport.Conn, error) {
+	return c.tr.Dial(addr)
+}

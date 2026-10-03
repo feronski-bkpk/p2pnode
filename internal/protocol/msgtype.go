@@ -21,6 +21,14 @@ const (
 	MsgHandshakeReply   MsgType = 0x0A
 	MsgHandshakeConfirm MsgType = 0x0B
 
+	MsgTunnelBuild     MsgType = 0x0C
+	MsgTunnelBuildOK   MsgType = 0x0D
+	MsgTunnelBuildFail MsgType = 0x0E
+	MsgTunnelData      MsgType = 0x0F
+	MsgTunnelAck       MsgType = 0x10
+	MsgTunnelClose     MsgType = 0x11
+	MsgTunnelBuildAck  MsgType = 0x12
+
 	MsgError MsgType = 0x7F
 )
 
@@ -48,6 +56,20 @@ func (t MsgType) String() string {
 		return "HANDSHAKE_REPLY"
 	case MsgHandshakeConfirm:
 		return "HANDSHAKE_CONFIRM"
+	case MsgTunnelBuild:
+		return "TUNNEL_BUILD"
+	case MsgTunnelBuildOK:
+		return "TUNNEL_BUILD_OK"
+	case MsgTunnelBuildFail:
+		return "TUNNEL_BUILD_FAIL"
+	case MsgTunnelBuildAck:
+		return "TUNNEL_BUILD_ACK"
+	case MsgTunnelData:
+		return "TUNNEL_DATA"
+	case MsgTunnelAck:
+		return "TUNNEL_ACK"
+	case MsgTunnelClose:
+		return "TUNNEL_CLOSE"
 	case MsgError:
 		return "ERROR"
 	default:
@@ -58,7 +80,8 @@ func (t MsgType) String() string {
 func (t MsgType) IsRequest() bool {
 	switch t {
 	case MsgPing, MsgFindNodeRequest, MsgStoreRequest, MsgFindValueRequest,
-		MsgHandshakeHello, MsgHandshakeReply, MsgHandshakeConfirm:
+		MsgHandshakeHello, MsgHandshakeReply, MsgHandshakeConfirm,
+		MsgTunnelBuild, MsgTunnelData, MsgTunnelClose:
 		return true
 	}
 	return false
@@ -66,7 +89,8 @@ func (t MsgType) IsRequest() bool {
 
 func (t MsgType) IsResponse() bool {
 	switch t {
-	case MsgPong, MsgFindNodeResponse, MsgStoreResponse, MsgFindValueResponse:
+	case MsgPong, MsgFindNodeResponse, MsgStoreResponse, MsgFindValueResponse,
+		MsgTunnelBuildOK, MsgTunnelBuildFail, MsgTunnelBuildAck, MsgTunnelAck:
 		return true
 	}
 	return false

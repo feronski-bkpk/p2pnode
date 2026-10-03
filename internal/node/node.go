@@ -13,11 +13,13 @@ import (
 	"p2pnode/internal/config"
 	"p2pnode/internal/events"
 	"p2pnode/internal/identity"
+	"p2pnode/internal/protocol"
 	"p2pnode/internal/routing"
 	"p2pnode/internal/rpc"
 	"p2pnode/internal/store"
 	"p2pnode/internal/transport"
 	"p2pnode/internal/transport/tcp"
+	"p2pnode/internal/tunnel"
 )
 
 type Node struct {
@@ -35,8 +37,19 @@ type Node struct {
 
 	Events *events.Logger
 
+	trTunnel transport.Transport
+
 	ExpireInterval    time.Duration
 	RepublishInterval time.Duration
+
+	tunnelMgr      *tunnel.TunnelManager
+	tunnelHandlers *tunnel.HandlerConfig
+	profileStore   *tunnel.ProfileStore
+	msgHistory     *tunnel.MessageStore
+	onMessage      func(tunnel.Message)
+
+	tunnelCtx    context.Context
+	tunnelCancel context.CancelFunc
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -64,6 +77,15 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 	tr := tcp.NewWithOptions(tcp.Options{
 		ConnectTimeout: cfg.ConnectTimeout,
 		ReadTimeout:    cfg.ReadTimeout,
+	})
+
+	tunnelReadTimeout := time.Duration(cfg.TunnelTTLSec)*time.Second + 30*time.Second
+	if tunnelReadTimeout <= 30*time.Second {
+		tunnelReadTimeout = 5*time.Minute + 30*time.Second
+	}
+	trTunnel := tcp.NewWithOptions(tcp.Options{
+		ConnectTimeout: cfg.ConnectTimeout,
+		ReadTimeout:    tunnelReadTimeout,
 	})
 
 	ln, err := tr.Listen(cfg.ListenAddr())
@@ -109,7 +131,7 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		"addr": ln.Addr(),
 	})
 
-	return &Node{
+	n := &Node{
 		Config:            cfg,
 		Log:               log,
 		Identity:          id,
@@ -121,9 +143,29 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		Checker:           checker,
 		Listener:          ln,
 		Events:            ev,
+		trTunnel:          trTunnel,
 		ExpireInterval:    ExpireInterval,
 		RepublishInterval: RepublishInterval,
-	}, nil
+	}
+
+	n.profileStore = tunnel.NewProfileStore()
+	n.msgHistory = tunnel.NewMessageStore(tunnel.DefaultMessageStoreSize)
+
+	if err := n.initTunnel(); err != nil {
+		ln.Close()
+		ev.Close()
+		return nil, fmt.Errorf("node: init tunnel: %w", err)
+	}
+
+	srv.TunnelHandler = func(conn transport.Conn, frame protocol.Frame) error {
+		raw, ok := conn.(tunnel.RawConn)
+		if !ok {
+			return fmt.Errorf("node: conn does not implement tunnel.RawConn")
+		}
+		return n.handleTunnelFrame(raw, frame)
+	}
+
+	return n, nil
 }
 
 func (n *Node) Start() {
@@ -131,11 +173,39 @@ func (n *Node) Start() {
 }
 
 func (n *Node) Stop() error {
+	n.Log.Info("node: stopping...")
+	start := time.Now()
+
+	n.Log.Debug("node: closing listener")
 	err := n.Listener.Close()
+
+	n.Log.Debug("node: stopping background tasks")
 	n.stopBackgroundTasks()
+	n.Log.Debug("node: background tasks stopped", "elapsed_ms", time.Since(start).Milliseconds())
+
+	if n.tunnelCancel != nil {
+		n.tunnelCancel()
+	}
+
+	if n.tunnelMgr != nil {
+		n.Log.Debug("node: closing tunnel manager")
+		n.tunnelMgr.Close()
+		n.Log.Debug("node: tunnel manager closed")
+	}
+	if n.tunnelHandlers != nil && n.tunnelHandlers.RelayStore != nil {
+		n.Log.Debug("node: closing relay store")
+		n.tunnelHandlers.RelayStore.Close()
+	}
+	if n.tunnelHandlers != nil && n.tunnelHandlers.DestSessions != nil {
+		n.tunnelHandlers.DestSessions.ExpireAll()
+	}
+
 	if n.Events != nil {
+		n.Log.Debug("node: closing events logger")
 		_ = n.Events.Close()
 	}
+
+	n.Log.Info("node: stopped", "total_ms", time.Since(start).Milliseconds())
 	return err
 }
 

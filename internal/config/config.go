@@ -49,38 +49,65 @@ type Config struct {
 	PublishAlias string `yaml:"publish_alias"`
 	FindAlias    string `yaml:"find_alias"`
 
+	MaxHops            int `yaml:"max_hops"`
+	TunnelPoolSize     int `yaml:"tunnel_pool_size"`
+	TunnelAckTimeoutMs int `yaml:"tunnel_ack_timeout_ms"`
+	TunnelTTLSec       int `yaml:"tunnel_ttl_sec"`
+
+	SendRepeat     int `yaml:"send_repeat"`
+	SendIntervalMs int `yaml:"send_interval_ms"`
+
+	NoServe       bool `yaml:"no_serve"`
+	PublishWaitMs int  `yaml:"publish_wait_ms"`
+
+	SendTo   string `yaml:"send_to"`
+	SendText string `yaml:"send_text"`
+
+	ExitAfterMs int `yaml:"exit_after_ms"`
+
 	source string
 }
 
 func Default() Config {
 	return Config{
-		NodeStateDir:     "./state",
-		ListenHost:       "0.0.0.0",
-		ListenPort:       9000,
-		BootstrapPeers:   nil,
-		SkipSelfLookup:   false,
-		NodeIDBits:       256,
-		KBucketSize:      4,
-		Alpha:            3,
-		ConnectTimeout:   3000 * time.Millisecond,
-		ReadTimeout:      5000 * time.Millisecond,
-		PingTimeout:      5000 * time.Millisecond,
-		ConnectTimeoutMs: 3000,
-		ReadTimeoutMs:    5000,
-		PingTimeoutMs:    5000,
-		MaxFramePayload:  65536,
-		ProtocolVersion:  1,
-		LogLevel:         "INFO",
-		ExportDir:        "",
-		ExportInterval:   0,
-		ExportIntervalMs: 0,
-		DumpRouting:      false,
-		LookupTarget:     "",
-		PublishSelf:      false,
-		FindNodeID:       "",
-		PublishAlias:     "",
-		FindAlias:        "",
-		source:           "defaults",
+		NodeStateDir:       "./state",
+		ListenHost:         "0.0.0.0",
+		ListenPort:         9000,
+		BootstrapPeers:     nil,
+		SkipSelfLookup:     false,
+		NodeIDBits:         256,
+		KBucketSize:        4,
+		Alpha:              3,
+		ConnectTimeout:     3000 * time.Millisecond,
+		ReadTimeout:        5000 * time.Millisecond,
+		PingTimeout:        5000 * time.Millisecond,
+		ConnectTimeoutMs:   3000,
+		ReadTimeoutMs:      5000,
+		PingTimeoutMs:      5000,
+		MaxFramePayload:    65536,
+		ProtocolVersion:    1,
+		LogLevel:           "INFO",
+		ExportDir:          "",
+		ExportInterval:     0,
+		ExportIntervalMs:   0,
+		DumpRouting:        false,
+		LookupTarget:       "",
+		PublishSelf:        false,
+		FindNodeID:         "",
+		PublishAlias:       "",
+		FindAlias:          "",
+		MaxHops:            3,
+		TunnelPoolSize:     3,
+		TunnelAckTimeoutMs: 5000,
+		TunnelTTLSec:       300,
+		SendRepeat:         1,
+		SendIntervalMs:     2000,
+		NoServe:            false,
+		PublishWaitMs:      3000,
+		SendTo:             "",
+		SendText:           "",
+		ExitAfterMs:        5000,
+		source:             "defaults",
 	}
 }
 
@@ -107,6 +134,19 @@ type yamlConfig struct {
 	FindNodeID       string   `yaml:"find_node_id"`
 	PublishAlias     string   `yaml:"publish_alias"`
 	FindAlias        string   `yaml:"find_alias"`
+
+	MaxHops            int  `yaml:"max_hops"`
+	TunnelPoolSize     int  `yaml:"tunnel_pool_size"`
+	TunnelAckTimeoutMs int  `yaml:"tunnel_ack_timeout_ms"`
+	TunnelTTLSec       int  `yaml:"tunnel_ttl_sec"`
+	SendRepeat         int  `yaml:"send_repeat"`
+	SendIntervalMs     int  `yaml:"send_interval_ms"`
+	NoServe            bool `yaml:"no_serve"`
+	PublishWaitMs      int  `yaml:"publish_wait_ms"`
+	ExitAfterMs        int  `yaml:"exit_after_ms"`
+
+	SendTo   string `yaml:"send_to"`
+	SendText string `yaml:"send_text"`
 }
 
 func (c *Config) LoadFromFile(path string) error {
@@ -184,6 +224,37 @@ func (c *Config) LoadFromFile(path string) error {
 	if y.FindAlias != "" {
 		c.FindAlias = y.FindAlias
 	}
+	if y.MaxHops != 0 {
+		c.MaxHops = y.MaxHops
+	}
+	if y.TunnelPoolSize != 0 {
+		c.TunnelPoolSize = y.TunnelPoolSize
+	}
+	if y.TunnelAckTimeoutMs != 0 {
+		c.TunnelAckTimeoutMs = y.TunnelAckTimeoutMs
+	}
+	if y.TunnelTTLSec != 0 {
+		c.TunnelTTLSec = y.TunnelTTLSec
+	}
+	if y.SendRepeat != 0 {
+		c.SendRepeat = y.SendRepeat
+	}
+	if y.SendIntervalMs != 0 {
+		c.SendIntervalMs = y.SendIntervalMs
+	}
+	c.NoServe = y.NoServe
+	if y.PublishWaitMs != 0 {
+		c.PublishWaitMs = y.PublishWaitMs
+	}
+	if y.SendTo != "" {
+		c.SendTo = y.SendTo
+	}
+	if y.SendText != "" {
+		c.SendText = y.SendText
+	}
+	if y.ExitAfterMs != 0 {
+		c.ExitAfterMs = y.ExitAfterMs
+	}
 
 	c.source = path
 	return nil
@@ -228,6 +299,20 @@ func Load(args []string) (Config, error) {
 		findNodeID     = fs.String("find-node-id", envStr("FIND_NODE_ID", cfg.FindNodeID), "hex NodeID для поиска записи")
 		publishAlias   = fs.String("publish-alias", envStr("PUBLISH_ALIAS", cfg.PublishAlias), "псевдоним для публикации")
 		findAlias      = fs.String("find-alias", envStr("FIND_ALIAS", cfg.FindAlias), "псевдоним для поиска")
+
+		maxHops        = fs.Int("max-hops", envInt("MAX_HOPS", cfg.MaxHops), "макс. ретрансляторов в туннеле")
+		tunnelPoolSize = fs.Int("tunnel-pool-size", envInt("TUNNEL_POOL_SIZE", cfg.TunnelPoolSize), "размер пула туннелей")
+		tunnelAckMs    = fs.Int("tunnel-ack-timeout-ms", envInt("TUNNEL_ACK_TIMEOUT_MS", cfg.TunnelAckTimeoutMs), "таймаут TUNNEL_ACK, мс")
+		tunnelTTLSec   = fs.Int("tunnel-ttl-sec", envInt("TUNNEL_TTL_SEC", cfg.TunnelTTLSec), "TTL туннеля, сек")
+		noServe        = fs.Bool("no-serve", envBool("NO_SERVE", cfg.NoServe), "не поднимать listener (клиент для одной команды)")
+		publishWaitMs  = fs.Int("publish-wait-ms", envInt("PUBLISH_WAIT_MS", cfg.PublishWaitMs), "пауза перед публикацией, мс")
+		sendRepeat     = fs.Int("send-repeat", envInt("SEND_REPEAT", cfg.SendRepeat), "сколько раз отправить сообщение")
+		sendIntervalMs = fs.Int("send-interval-ms", envInt("SEND_INTERVAL_MS", cfg.SendIntervalMs), "интервал между отправками, мс")
+
+		exitAfterMs = fs.Int("exit-after-ms", envInt("EXIT_AFTER_MS", cfg.ExitAfterMs), "форсированный выход для -no-serve, мс")
+
+		sendTo   = fs.String("send-to", envStr("SEND_TO", cfg.SendTo), "hex NodeID получателя")
+		sendText = fs.String("send-text", envStr("SEND_TEXT", cfg.SendText), "текст прикладного сообщения")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -257,6 +342,18 @@ func Load(args []string) (Config, error) {
 	cfg.FindNodeID = *findNodeID
 	cfg.PublishAlias = *publishAlias
 	cfg.FindAlias = *findAlias
+
+	cfg.MaxHops = *maxHops
+	cfg.TunnelPoolSize = *tunnelPoolSize
+	cfg.TunnelAckTimeoutMs = *tunnelAckMs
+	cfg.TunnelTTLSec = *tunnelTTLSec
+	cfg.NoServe = *noServe
+	cfg.PublishWaitMs = *publishWaitMs
+	cfg.SendRepeat = *sendRepeat
+	cfg.SendIntervalMs = *sendIntervalMs
+	cfg.SendTo = *sendTo
+	cfg.SendText = *sendText
+	cfg.ExitAfterMs = *exitAfterMs
 
 	if *bootstrap != "" {
 		cfg.BootstrapPeers = nil
@@ -300,6 +397,24 @@ func (c Config) Validate() error {
 	}
 	if c.NodeIDBits != 256 {
 		return fmt.Errorf("config: node_id_bits must be 256, got %d", c.NodeIDBits)
+	}
+	if c.MaxHops < 2 {
+		return fmt.Errorf("config: max_hops must be >= 2, got %d", c.MaxHops)
+	}
+	if c.TunnelPoolSize < 1 {
+		return fmt.Errorf("config: tunnel_pool_size must be >= 1, got %d", c.TunnelPoolSize)
+	}
+	if c.TunnelTTLSec < 1 {
+		return fmt.Errorf("config: tunnel_ttl_sec must be >= 1, got %d", c.TunnelTTLSec)
+	}
+	if c.PublishWaitMs < 0 {
+		return fmt.Errorf("config: publish_wait_ms must be >= 0, got %d", c.PublishWaitMs)
+	}
+	if c.SendRepeat < 1 {
+		return fmt.Errorf("config: send_repeat must be >= 1, got %d", c.SendRepeat)
+	}
+	if c.SendIntervalMs < 0 {
+		return fmt.Errorf("config: send_interval_ms must be >= 0, got %d", c.SendIntervalMs)
 	}
 	return nil
 }

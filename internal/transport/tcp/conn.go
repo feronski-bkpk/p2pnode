@@ -31,6 +31,7 @@ type conn struct {
 
 	wmu sync.Mutex
 
+	rmu         sync.RWMutex
 	readTimeout time.Duration
 }
 
@@ -43,12 +44,25 @@ func newConn(nc net.Conn, opts Options) *conn {
 	}
 }
 
+func (c *conn) SetReadTimeout(d time.Duration) {
+	c.rmu.Lock()
+	c.readTimeout = d
+	c.rmu.Unlock()
+}
+
 func (c *conn) ReadFrame() (protocol.Frame, error) {
-	if c.readTimeout > 0 {
-		if err := c.nc.SetReadDeadline(time.Now().Add(c.readTimeout)); err != nil {
+	c.rmu.RLock()
+	timeout := c.readTimeout
+	c.rmu.RUnlock()
+
+	if timeout > 0 {
+		if err := c.nc.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 			return protocol.Frame{}, err
 		}
+	} else {
+		_ = c.nc.SetReadDeadline(time.Time{})
 	}
+
 	f, err := protocol.ReadFrame(c.r)
 	if err != nil {
 		if errors.Is(err, io.EOF) {

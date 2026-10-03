@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -19,11 +20,13 @@ import (
 	"p2pnode/internal/routing"
 	"p2pnode/internal/rpc"
 	"p2pnode/internal/store"
+	"p2pnode/internal/tunnel"
 )
 
 func main() {
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
 		os.Exit(2)
 	}
 
@@ -40,16 +43,37 @@ func main() {
 		"node_id", n.Local.NodeID.String(),
 		"state_dir", cfg.NodeStateDir,
 		"k", cfg.KBucketSize,
-		"alpha", cfg.Alpha)
+		"alpha", cfg.Alpha,
+		"no_serve", cfg.NoServe)
 
-	n.Start()
+	n.OnMessage(func(msg tunnel.Message) {
+		log.Info("message received",
+			"from", hex.EncodeToString(msg.FromID[:]),
+			"from_short", fmt.Sprintf("%x", msg.FromID[:4]),
+			"message_id", msg.MessageID.Short(),
+			"text", msg.Text,
+			"len", len(msg.Text),
+		)
+	})
+
+	if !cfg.NoServe {
+		n.Start()
+	}
 
 	if err := n.Bootstrap(); err != nil {
 		log.Warn("bootstrap error", "err", err)
 	}
 	log.Info("bootstrap complete", "table_size", n.Table.Size())
 
-	n.StartBackgroundTasks()
+	if !cfg.NoServe {
+		n.StartBackgroundTasks()
+	}
+
+	if cfg.PublishWaitMs > 0 && (cfg.PublishSelf || cfg.PublishAlias != "") {
+		log.Info("publish: waiting for convergence",
+			"wait_ms", cfg.PublishWaitMs)
+		time.Sleep(time.Duration(cfg.PublishWaitMs) * time.Millisecond)
+	}
 
 	if cfg.PublishSelf || cfg.PublishAlias != "" {
 		if err := publishRecords(cfg, n, log); err != nil {
@@ -73,6 +97,30 @@ func main() {
 		if err := exportMetrics(cfg, n, log); err != nil {
 			log.Error("export metrics", "err", err)
 		}
+	}
+
+	if cfg.SendTo != "" {
+		if err := sendMessage(cfg, n, log); err != nil {
+			log.Error("send message", "err", err)
+		}
+	}
+
+	if cfg.NoServe {
+		log.Info("no-serve: exiting")
+
+		exitAfter := cfg.ExitAfterMs
+		if exitAfter <= 0 {
+			exitAfter = 5000
+		}
+		go func() {
+			time.Sleep(time.Duration(exitAfter) * time.Millisecond)
+			log.Warn("no-serve: forced exit after timeout", "ms", exitAfter)
+			os.Exit(0)
+		}()
+
+		_ = n.Stop()
+		time.Sleep(50 * time.Millisecond)
+		return
 	}
 
 	var wg sync.WaitGroup
@@ -112,6 +160,109 @@ func main() {
 	wg.Wait()
 	_ = n.Stop()
 	time.Sleep(50 * time.Millisecond)
+}
+
+func sendMessage(cfg config.Config, n *node.Node, log *slog.Logger) error {
+	destBytes, err := hex.DecodeString(strings.TrimSpace(cfg.SendTo))
+	if err != nil {
+		return fmt.Errorf("send-to: hex decode: %w", err)
+	}
+	if len(destBytes) != 32 {
+		return fmt.Errorf("send-to: want 32 bytes, got %d", len(destBytes))
+	}
+	var destID [32]byte
+	copy(destID[:], destBytes)
+
+	log.Info("send: starting",
+		"dest", fmt.Sprintf("%x", destID[:4]),
+		"text_len", len(cfg.SendText),
+		"pool_size", cfg.TunnelPoolSize,
+		"repeat", cfg.SendRepeat,
+		"interval_ms", cfg.SendIntervalMs)
+
+	if cfg.TunnelPoolSize > 1 {
+		start := time.Now()
+		if err := n.BuildTunnelPool(destID); err != nil {
+			log.Warn("send: pool build failed, fallback to single tunnel",
+				"err", err,
+				"duration_ms", time.Since(start).Milliseconds())
+		} else {
+			log.Info("send: pool built",
+				"size", cfg.TunnelPoolSize,
+				"duration_ms", time.Since(start).Milliseconds())
+		}
+	}
+
+	repeat := cfg.SendRepeat
+	if repeat < 1 {
+		repeat = 1
+	}
+	interval := time.Duration(cfg.SendIntervalMs) * time.Millisecond
+
+	for i := 0; i < repeat; i++ {
+		text := cfg.SendText
+		if repeat > 1 {
+			text = fmt.Sprintf("%s [%d/%d]", cfg.SendText, i+1, repeat)
+		}
+
+		log.Info("send: iteration",
+			"iteration", i+1,
+			"total", repeat,
+			"text", text)
+
+		start := time.Now()
+		msgID, err := n.SendMessage(destID, text)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			log.Error("send: failed",
+				"iteration", i+1,
+				"err", err,
+				"duration_ms", elapsed.Milliseconds())
+		} else {
+			log.Info("send: acked",
+				"iteration", i+1,
+				"message_id", msgID.Short(),
+				"duration_ms", elapsed.Milliseconds())
+		}
+
+		st := n.TunnelStats()
+		log.Info("tunnel stats",
+			"iteration", i+1,
+			"sessions", st.Sessions,
+			"pools", st.Pools,
+			"builds_ok", st.BuildsOK,
+			"builds_fail", st.BuildsFail,
+			"rebuilds_ok", st.RebuildsOK,
+			"rebuilds_fail", st.RebuildsFail,
+			"messages", st.Messages)
+
+		if i < repeat-1 && interval > 0 {
+			log.Info("send: sleeping between iterations",
+				"interval_ms", interval.Milliseconds())
+			time.Sleep(interval)
+		}
+	}
+
+	history := n.History()
+	if len(history) > 0 {
+		log.Info("history", "count", len(history))
+		for _, m := range history {
+			direction := "in"
+			if m.Direction == tunnel.Outgoing {
+				direction = "out"
+			}
+			log.Info("history entry",
+				"direction", direction,
+				"message_id", m.MessageID.Short(),
+				"from", fmt.Sprintf("%x", m.FromID[:4]),
+				"to", fmt.Sprintf("%x", m.ToID[:4]),
+				"text", m.Text,
+				"delivered", m.Delivered)
+		}
+	}
+
+	return nil
 }
 
 func exportMetrics(cfg config.Config, n *node.Node, log *slog.Logger) error {

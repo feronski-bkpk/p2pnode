@@ -88,6 +88,58 @@ type HandshakeConfirmPayload struct {
 	Body []byte `msgpack:"body"`
 }
 
+type TunnelBuildPayload struct {
+	TunnelID   [16]byte   `msgpack:"tunnel_id"`
+	DestID     [32]byte   `msgpack:"dest_id"`
+	FullPath   []string   `msgpack:"full_path"`
+	HopIndex   uint8      `msgpack:"hop_index"`
+	MaxHops    uint8      `msgpack:"max_hops"`
+	TTLSec     int64      `msgpack:"ttl_sec"`
+	E2EPubKey  []byte     `msgpack:"e2e_pubkey"`
+	E2ERandom  []byte     `msgpack:"e2e_random"`
+	InitID     [32]byte   `msgpack:"init_id"`
+	InitPubKey []byte     `msgpack:"init_pubkey"`
+	PathSoFar  [][32]byte `msgpack:"path_so_far"`
+}
+
+type TunnelBuildAckPayload struct {
+	TunnelID [16]byte `msgpack:"tunnel_id"`
+	HopIndex uint8    `msgpack:"hop_index"`
+	HopID    [32]byte `msgpack:"hop_id"`
+}
+
+type TunnelBuildOKPayload struct {
+	TunnelID      [16]byte   `msgpack:"tunnel_id"`
+	DestID        [32]byte   `msgpack:"dest_id"`
+	DestE2EPubKey []byte     `msgpack:"dest_e2e_pubkey"`
+	DestE2ERandom []byte     `msgpack:"dest_e2e_random"`
+	DestIDPubKey  []byte     `msgpack:"dest_id_pubkey"`
+	Signature     []byte     `msgpack:"signature"`
+	Path          [][32]byte `msgpack:"path"`
+}
+
+type TunnelBuildFailPayload struct {
+	TunnelID  [16]byte `msgpack:"tunnel_id"`
+	Reason    string   `msgpack:"reason"`
+	FailedHop [32]byte `msgpack:"failed_hop"`
+}
+
+type TunnelDataPayload struct {
+	TunnelID   [16]byte `msgpack:"tunnel_id"`
+	MessageID  [16]byte `msgpack:"message_id"`
+	Ciphertext []byte   `msgpack:"ciphertext"`
+}
+
+type TunnelAckPayload struct {
+	TunnelID  [16]byte `msgpack:"tunnel_id"`
+	MessageID [16]byte `msgpack:"message_id"`
+}
+
+type TunnelClosePayload struct {
+	TunnelID [16]byte `msgpack:"tunnel_id"`
+	Reason   string   `msgpack:"reason"`
+}
+
 type ErrorPayload struct {
 	Code    string `msgpack:"code"`
 	Message string `msgpack:"message"`
