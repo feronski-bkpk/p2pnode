@@ -187,6 +187,17 @@ func (n *Node) Stop() error {
 		n.tunnelCancel()
 	}
 
+	if n.tunnelMgr != nil && n.tunnelMgr.Trace != nil {
+		tracePath := filepath.Join(n.Config.NodeStateDir, "trace.json")
+		if err := n.tunnelMgr.Trace.ExportJSON(tracePath); err != nil {
+			n.Log.Warn("node: export trace", "path", tracePath, "err", err)
+		} else {
+			n.Log.Debug("node: trace exported",
+				"path", tracePath,
+				"events", n.tunnelMgr.Trace.Count())
+		}
+	}
+
 	if n.tunnelMgr != nil {
 		n.Log.Debug("node: closing tunnel manager")
 		n.tunnelMgr.Close()

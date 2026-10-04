@@ -4,7 +4,8 @@
 работающей поверх TCP/IP. Узел обнаруживает других участников через
 распределённую хэш-таблицу (Kademlia DHT), обменивается подписанными
 записями и защищает канал связи аутентифицированным шифрованием
-(собственный AKE на библиотечных примитивах).
+(собственный AKE на библиотечных примитивах), а также умеет строить
+туннели через ретрансляторы с end-to-end шифрованием.
 
 ## Возможности
 
@@ -14,7 +15,7 @@
 | 2 | Ed25519-идентичность, Kademlia DHT (PING, FIND_NODE), bootstrap, итеративный lookup |
 | 3 | Подписанные `NodeRecord` (Ed25519), STORE/FIND_VALUE, репликация R=3, TTL, anti-rollback, псевдонимы |
 | 4 | Собственный AKE (Ed25519 + X25519 + HKDF + ChaCha20-Poly1305), anti-replay |
-| 5 | Туннели через ретрансляторы, прикладные сообщения и файлы |
+| 5 | Туннели через ретрансляторы: E2E-шифрование, build-ACK, TTL, восстановление, пул |
 | 6 | Docker Compose, 4 bootstrap-схемы, 20+ узлов |
 | 7 | Метрики, статистика, графики |
 
@@ -24,6 +25,7 @@
 - **Python 3** — для скриптов анализа и генерации отчёта.
 - **Graphviz** (опционально) — для визуализации графов.
 - **bash**, `sha256sum`, `mktemp` — стандартные утилиты Linux.
+- **tcpdump** (опционально) — для демонстрации E2E-защиты.
 
 **Go-зависимости** (устанавливаются автоматически):
 
@@ -141,7 +143,45 @@ sleep 20
 
 В логах — `handshake_done` с `session_id`. Трафик шифрован ChaCha20-Poly1305.
 
-### 4. HTML-отчёт с графами
+### 4. Туннели через ретрансляторы
+
+**Базовая доставка** (3 ретранслятора, E2E):
+
+```bash
+./scripts/demo_tunnel.sh
+```
+
+Проверки:
+
+- `OK: 3 relays participated`
+- `tunnel: build complete ... acks_received=3`
+- `OK: plaintext not found in relay logs (E5-4)`
+- `OK: node-2 received tunnel message`
+
+**Восстановление после отказа ретранслятора**:
+
+```bash
+./scripts/demo_tunnel_recovery.sh
+```
+
+**Доказательство E2E-защиты через pcap**:
+
+```bash
+# Один раз: даём tcpdump права без root
+sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)
+
+./scripts/demo_tunnel_pcap.sh
+```
+
+**Пул из 3 туннелей с переключением**:
+
+```bash
+./scripts/demo_tunnel_pool.sh
+```
+
+**Детали:** см. **[docs/TUNNEL.md](docs/TUNNEL.md)**.
+
+### 5. HTML-отчёт с графами
 
 ```bash
 # Запустить эксперимент
@@ -162,6 +202,8 @@ xdg-open report.html
 - **Star vs Ring** — сравнение bootstrap-схем.
 - **Сериализация** — msgpack vs JSON vs gob.
 
+**Детали:** см. **[docs/VISUALIZATION.md](docs/VISUALIZATION.md)**.
+
 ## Структура репозитория
 
 ```
@@ -169,7 +211,9 @@ p2pnode/
 ├── README.md                       ← этот файл
 ├── docs/
 │   ├── ARCHITECTURE.md             ← архитектура, решения
-│   └── PROTOCOL.md                 ← протокол и алгоритмы
+│   ├── PROTOCOL.md                 ← протокол и алгоритмы
+│   ├── TUNNEL.md                   ← туннели через ретрансляторы
+│   └── VISUALIZATION.md            ← Graphviz, HTML-отчёт
 ├── cmd/
 │   └── node/main.go                ← точка входа
 ├── internal/
@@ -183,24 +227,42 @@ p2pnode/
 │   ├── protocol/                   ← формат кадра, типы сообщений
 │   ├── record/                     ← подписанные NodeRecord
 │   ├── routing/                    ← XOR-метрика, k-buckets
-│   ├── rpc/                        ← RPC (PING, FIND_NODE, STORE, FIND_VALUE, handshake)
+│   ├── rpc/                        ← RPC (PING, FIND_NODE, STORE, FIND_VALUE, handshake, TunnelHandler)
 │   ├── store/                      ← локальное хранилище DHT
-│   └── transport/
-│       ├── transport.go            ← интерфейсы Conn/Listener/Transport
-│       └── tcp/                    ← TCP-реализация
+│   ├── transport/
+│   │   ├── transport.go            ← интерфейсы Conn/Listener/Transport
+│   │   └── tcp/                    ← TCP-реализация (SetReadTimeout)
+│   └── tunnel/                     ← туннели через ретрансляторы
+│       ├── tunnel.go               ← Tunnel, State, E2ESession
+│       ├── id.go                   ← ID, NewID
+│       ├── build.go                ← BuildCoordinator
+│       ├── handlers.go             ← HandleTunnelBuild, relayLoop, destDataLoop
+│       ├── relay.go                ← RelayState, RelayStore, DestSessionStore
+│       ├── session.go              ← Session, SendMessage, readLoop
+│       ├── manager.go              ← TunnelManager, BuildPool, pickSession
+│       ├── message.go              ← MessageStore
+│       ├── route.go                ← RouteBuilder
+│       ├── profile.go              ← ProfileStore
+│       └── *_test.go               ← unit + integration тесты
 ├── scripts/
 │   ├── common.sh                   ← общие переменные
 │   ├── run_star.sh                 ← star-стенд
 │   ├── run_ring.sh                 ← ring-стенд
 │   ├── run_experiment.sh           ← полный эксперимент
-│   ├── demo_store.sh               ← демонстрация STORE/FIND_VALUE
+│   ├── demo_store.sh               ← STORE / FIND_VALUE
+│   ├── demo_tunnel.sh              ← туннельная доставка
+│   ├── demo_tunnel_recovery.sh     ← восстановление (E5-6)
+│   ├── demo_tunnel_pcap.sh         ← E2E-защита через pcap (E5-4)
+│   ├── demo_tunnel_pool.sh         ← пул из 3 туннелей (E5-8)
 │   ├── check_ne_degenerate.sh      ← проверка невырожденности
 │   ├── compare_bootstrap.sh        ← star vs ring
 │   ├── compare_serialization.sh    ← msgpack vs JSON vs gob
+│   ├── compare_visual.sh           ← star vs ring графы
 │   ├── generate_report.sh          ← HTML-отчёт
 │   ├── visualize.sh                ← Graphviz-графы
 │   ├── collect_routing.sh          ← сбор снапшотов
 │   ├── lookup_batch.sh             ← 30 lookup'ов
+│   ├── capture_and_verify.sh       ← pcap + проверка шифрования
 │   └── stop_all.sh                 ← остановка
 ├── deploy/
 │   └── configs/                    ← примеры YAML-конфигов
@@ -228,6 +290,22 @@ p2pnode/
 | Уровень логов | `-log-level` | `LOG_LEVEL` | `INFO` |
 | Каталог метрик | `-export-dir` | `EXPORT_DIR` | — |
 
+### Параметры туннелей
+
+| Параметр | CLI | Env | Default |
+|----------|-----|-----|---------|
+| Макс. ретрансляторов | `-max-hops` | `MAX_HOPS` | `3` |
+| Размер пула | `-tunnel-pool-size` | `TUNNEL_POOL_SIZE` | `3` |
+| Таймаут ACK | `-tunnel-ack-timeout-ms` | `TUNNEL_ACK_TIMEOUT_MS` | `5000` |
+| TTL туннеля | `-tunnel-ttl-sec` | `TUNNEL_TTL_SEC` | `300` |
+| Режим клиента | `-no-serve` | `NO_SERVE` | `false` |
+| Пауза перед publish | `-publish-wait-ms` | `PUBLISH_WAIT_MS` | `3000` |
+| Получатель | `-send-to` | `SEND_TO` | — |
+| Текст | `-send-text` | `SEND_TEXT` | — |
+| Число отправок | `-send-repeat` | `SEND_REPEAT` | `1` |
+| Интервал | `-send-interval-ms` | `SEND_INTERVAL_MS` | `2000` |
+| Force-exit | `-exit-after-ms` | `EXIT_AFTER_MS` | `5000` |
+
 ### YAML-конфиг
 
 ```bash
@@ -239,7 +317,12 @@ go run ./cmd/node -config deploy/configs/node-seed.yaml
 ## Документация
 
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — слои, модули,
-  инженерные решения (TCP, msgpack, Ed25519, Kademlia, AKE),
+  инженерные решения (TCP, msgpack, Ed25519, Kademlia, AKE, туннели),
   модель угроз, границы.
 - **[PROTOCOL.md](docs/PROTOCOL.md)** — формат кадра, типы сообщений,
-  payload'ы, алгоритмы lookup / STORE / handshake.
+  payload'ы, алгоритмы lookup / STORE / handshake / туннелей.
+- **[TUNNEL.md](docs/TUNNEL.md)** — туннели через ретрансляторы:
+  построение, E2E-шифрование, состояния, восстановление, пул, TTL,
+  демо-сценарии.
+- **[VISUALIZATION.md](docs/VISUALIZATION.md)** — Graphviz-графы,
+  HTML-отчёт с D3.js, сравнение bootstrap-схем, event stream.

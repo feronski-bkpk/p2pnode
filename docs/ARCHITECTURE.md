@@ -13,7 +13,8 @@
 - хранит и находит подписанные адресные записи (`NodeRecord`)
   с репликацией на `R=3` узлов;
 - защищает канал связи аутентифицированным шифрованием
-  (собственный AKE на библиотечных примитивах).
+  (собственный AKE на библиотечных примитивах);
+- умеет строить туннели через ретрансляторы с end-to-end шифрованием.
 
 Узлы **не имеют центрального сервера**. Роль «точки входа» выполняет
 bootstrap-узел, используемый только для первичного присоединения.
@@ -30,12 +31,26 @@ bootstrap-узел, используемый только для первичн�
 │  ├── Bootstrap() — присоединение к сети                     │
 │  ├── Publish() — публикация NodeRecord                      │
 │  ├── FindValue() — поиск записи                             │
+│  ├── SendMessage() — отправка через туннель                 │
+│  ├── BuildTunnelPool() — построение пула туннелей           │
 │  └── StartBackgroundTasks() — expire + republish            │
+├─────────────────────────────────────────────────────────────┤
+│  internal/tunnel             туннели через ретрансляторы    │
+│  ├── Tunnel, State, Manager (низкоуровневый реестр)         │
+│  ├── TunnelManager — фасад: Build, BuildPool, SendMessage   │
+│  ├── BuildCoordinator — построение (TUNNEL_BUILD + ACK)     │
+│  ├── RouteBuilder — выбор маршрута с exclude                │
+│  ├── ProfileStore — профили ретрансляторов (EMA)            │
+│  ├── RelayStore — forward-state ретранслятора               │
+│  ├── DestSessionStore — E2E-сессии dest'а                   │
+│  ├── Session — отправка/приём, ACK, rebuild                 │
+│  └── MessageStore — история и дедупликация                  │
 ├─────────────────────────────────────────────────────────────┤
 │  internal/rpc                RPC-слой                       │
 │  ├── Client — исходящие RPC с handshake                     │
 │  ├── Server — приём входящих, handshake + dispatch          │
 │  ├── LookupNode — итеративный поиск (ALPHA=3)               │
+│  ├── TunnelHandler — диспетчер TUNNEL_* кадров              │
 │  └── Handlers: HandlePing, HandleFindNode,                  │
 │      HandleStore, HandleFindValue                           │
 ├─────────────────────────────────────────────────────────────┤
@@ -63,11 +78,11 @@ bootstrap-узел, используемый только для первичн�
 ├─────────────────────────────────────────────────────────────┤
 │  internal/protocol           формат кадра и сообщений       │
 │  ├── Frame: 24-байтовый заголовок                           │
-│  └── MsgType + payload'ы                                    │
+│  └── MsgType + payload'ы (RPC + Tunnel)                     │
 ├─────────────────────────────────────────────────────────────┤
 │  internal/transport          транспорт                      │
 │  ├── Conn, Listener, Transport — интерфейсы                 │
-│  └── tcp — реализация поверх TCP                            │
+│  └── tcp — реализация поверх TCP (SetReadTimeout)           │
 ├─────────────────────────────────────────────────────────────┤
 │  internal/config             конфигурация                   │
 │  └── CLI > env > YAML > defaults                            │
@@ -110,18 +125,20 @@ TCP accept
     └── Server.handleConn(conn)
           │
           ├── conn.ReadFrame() → helloFrame
-          ├── Server.handleHandshake(conn, helloFrame)
-          │       ├── crypto.HandshakeState (responder)
-          │       ├── ProcessHello → initiator data
-          │       ├── BuildReply → SecureConn-req
-          │       ├── ProcessConfirm
-          │       └── DeriveKeys → SecureConn
+          ├── if TUNNEL_* → Server.TunnelHandler
+          │       (владение conn переходит в tunnel-подсистему)
           │
-          └── loop:
-                ├── secure.ReadFrame() → frame (расшифрован)
-                ├── Server.dispatch(secure, frame)
-                │       └── HandlePing / HandleFindNode / ...
-                └── secure.WriteFrame(response)
+          └── иначе → Server.handleHandshake(conn, helloFrame)
+                  ├── crypto.HandshakeState (responder)
+                  ├── ProcessHello → initiator data
+                  ├── BuildReply → SecureConn-req
+                  ├── ProcessConfirm
+                  └── DeriveKeys → SecureConn
+                  │
+                  └── loop:
+                        ├── secure.ReadFrame() → frame
+                        ├── Server.dispatch(secure, frame)
+                        └── secure.WriteFrame(response)
 ```
 
 ### 3.3. Поток данных при handshake
@@ -142,6 +159,31 @@ Initiator                                 Responder
    │  SecureConn                              │
 ```
 
+### 3.4. Поток данных при построении туннеля (этап 5)
+
+```
+Alice                  R1                  R2                  Bob
+  │                     │                   │                   │
+  │──TUNNEL_BUILD──────▶│                   │                   │
+  │                     │                   │                   │
+  │◀──TUNNEL_BUILD_ACK──│                   │                   │
+  │   (ack от R1)       │──TUNNEL_BUILD────▶│                   │
+  │                     │                   │                   │
+  │◀──TUNNEL_BUILD_ACK──────────────────────│                   │
+  │   (ack от R2)       │                   │──TUNNEL_BUILD────▶│
+  │                     │                   │                   │
+  │◀──TUNNEL_BUILD_OK───────────────────────│◀──TUNNEL_BUILD_OK─│
+  │   (dest e2e pubkey, │                   │                   │
+  │    signature)       │                   │                   │
+  │                     │                   │                   │
+  │  Alice:             │ RelayState        │ RelayState        │ DestSession
+  │  Tunnel ACTIVE      │ {prev,next,ttl}   │ {prev,next,ttl}   │ {e2e,ttl}
+```
+
+**Ключевое:** ACK от каждого ретранслятора идёт **обратно по цепочке**
+через `relayLoop`. Инициатор ждёт **все ACK'и + BUILD_OK** и только
+тогда активирует туннель.
+
 ## 4. Инженерные решения
 
 ### 4.1. Транспорт — TCP
@@ -152,6 +194,11 @@ Initiator                                 Responder
 
 **Абстракция:** `transport.Conn` — интерфейс. TCP — реализация.
 UDP добавляется без изменения DHT/RPC.
+
+**Два транспорта у узла:**
+
+- `tr` — для RPC, `ReadTimeout=cfg.ReadTimeout` (по умолчанию 5 сек).
+- `trTunnel` — для туннелей, `ReadTimeout=0` (нет idle timeout).
 
 ### 4.2. Сериализация — MessagePack
 
@@ -220,7 +267,7 @@ UDP добавляется без изменения DHT/RPC.
 
 - **version** — эволюция протокола.
 - **type** — диспетчеризация.
-- **flags** — зарезервировано под этапы 5+.
+- **flags** — зарезервировано.
 - **request_id** — корреляция запрос/ответ, дедупликация.
 - **payload_length** — проверяется **до** выделения буфера.
 - **payload** — до 64 КиБ.
@@ -351,6 +398,66 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 
 **Назначение:** визуализация, отладка, метрики.
 
+### 4.13. Туннели через ретрансляторы
+
+**Решение:** цепочка ретрансляторов с end-to-end шифрованием.
+Инициатор сам выбирает всю цепочку (`FullPath`), каждый ретранслятор
+знает только следующий адрес.
+
+**Обоснование:**
+
+- **E5-1:** ≥2 ретранслятора; проверка петель через `PathSoFar`.
+- **E5-2:** каждый ретранслятор подтверждает включение через
+  `TUNNEL_BUILD_ACK`; инициатор ждёт **все** ACK'и + `BUILD_OK`.
+- **E5-4:** E2E X25519 ephemeral + Ed25519-подпись dest'а + HKDF +
+  AEAD ChaCha20-Poly1305. Ретрансляторы видят только ciphertext.
+
+**Формат:** `TUNNEL_BUILD (0x0C)`, `TUNNEL_BUILD_OK (0x0D)`,
+`TUNNEL_BUILD_FAIL (0x0E)`, `TUNNEL_DATA (0x0F)`, `TUNNEL_ACK (0x10)`,
+`TUNNEL_CLOSE (0x11)`, `TUNNEL_BUILD_ACK (0x12)`.
+
+**Детали:** см. `docs/TUNNEL.md`.
+
+### 4.14. TTL туннеля и фоновые expire loop
+
+**Решение:** TTL туннеля `Config.TunnelTTLSec` (по умолчанию 300 секунд).
+Передаётся в `TunnelBuildPayload.TTLSec`, каждый хоп устанавливает
+`ExpiresAt = now + TTL`.
+
+**Фоновые expire loop:**
+
+- `TunnelManager.StartExpireLoop` — раз в 30 сек удаляет истёкшие сессии.
+- `StartStoreExpireLoop` — раз в 30 сек очищает `RelayState` и `DestSession`.
+
+**Обоснование:** предотвращает утечки ресурсов при потере связи.
+
+### 4.15. Пул туннелей и exclude-роутинг
+
+**Решение:** `TunnelManager.BuildPool` строит `PoolSize` (default 3)
+туннелей к одному dest'у. Каждый следующий строится с `exclude`
+ретрансляторов предыдущих — маршруты **разные** при достаточном
+числе узлов.
+
+**Fallback:** если с `exclude` не хватает кандидатов — retry без
+`exclude` (маршруты пересекаются, но пул из 3 сессий сохраняется).
+
+**Обоснование:** E5-8 — при отказе одного ретранслятора система
+переключается на другую сессию пула **без нового Build**.
+
+### 4.16. Отдельный транспорт для туннелей
+
+**Решение:** `Node.trTunnel` — отдельный `tcp.Transport` с
+`ReadTimeout=0`. RPC-транспорт имеет `ReadTimeout=5s`; туннельные
+соединения **долгоживущие** и могут не иметь данных между Build и
+первым DATA.
+
+**Динамическое переключение:** `rpc.Server.handleConn` при получении
+туннельного кадра вызывает `SetReadTimeout(0)` через type assertion.
+
+**Обоснование:** без этого `relayLoop` получает `transport.ErrTimeout`
+через 5 секунд простоя и закрывает туннель. Это **фундаментальное
+требование** для E5-8 (пул с интервалом между отправками > 5 сек).
+
 ## 5. Модель угроз
 
 ### 5.1. Что защищаем
@@ -361,6 +468,8 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 4. **Свежесть сообщений** — anti-replay.
 5. **Актуальность записей DHT** — anti-rollback по sequence_number.
 6. **Устойчивость к отказу хранителя** — репликация R=3.
+7. **E2E-конфиденциальность в туннеле** — от «честного, но любопытного»
+   ретранслятора (E5-4).
 
 ### 5.2. От чего защищаем
 
@@ -375,6 +484,7 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 | **Подмена DHT-записи** | Ed25519-подпись NodeRecord |
 | **Откат версии записи** | sequence_number |
 | **Истечение TTL** | Проверка `expires_at` |
+| **Честный, но любопытный ретранслятор** | E2E (X25519+AEAD); relay видит только ciphertext |
 
 ### 5.3. От чего НЕ защищаем
 
@@ -393,6 +503,9 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 8. **Компрометация эфемерного ключа.** Тогда при наличии `ss` (id×id)
    текущая сессия защищена, но если и долговременный скомпрометирован —
    всё раскрыто.
+9. **Анонимность от глобального наблюдателя внутри туннеля.**
+   `next_hop` виден каждому ретранслятору. ТЗ прямо говорит:
+   «не требуется доказывать анонимность».
 
 ## 6. Ключевые инварианты
 
@@ -409,3 +522,10 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 10. **Уничтожение сессионных ключей после Close.**
 11. **Anti-rollback:** `sequence_number` не уменьшается.
 12. **TTL:** запись с `expires_at < now` не выдаётся.
+13. **E2E:** ретранслятор не может расшифровать payload туннеля.
+14. **TTL туннеля:** `Tunnel.Expired()` при `now > expiresAt`.
+15. **Build-ACK:** туннель ACTIVE только если получены все ACK'и +
+    BUILD_OK.
+16. **Rebuild:** `message_id` сохраняется между попытками.
+17. **Пул:** `BuildPool` строит ≥3 сессии; `pickSession` использует
+    их по attempt.

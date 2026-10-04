@@ -24,6 +24,8 @@ type HandlerConfig struct {
 	DestSessions *DestSessionStore
 
 	Manager *Manager
+
+	Trace *Trace
 }
 
 func (hc *HandlerConfig) HandleTunnelBuild(conn RawConn, frame protocol.Frame) error {
@@ -68,6 +70,16 @@ func (hc *HandlerConfig) handleAsRelay(conn RawConn, frame protocol.Frame, req *
 		"next", nextAddr,
 		"ttl_sec", req.TTLSec)
 
+	hc.Trace.Add(TraceEvent{
+		Kind:     TraceKindRelayBuild,
+		TunnelID: tunnelID.Short(),
+		HopIndex: int(req.HopIndex),
+		Details: map[string]any{
+			"next":    nextAddr,
+			"ttl_sec": req.TTLSec,
+		},
+	})
+
 	nextConn, err := hc.Dial(nextAddr)
 	if err != nil {
 		return hc.sendBuildFail(conn, frame, tunnelID,
@@ -93,6 +105,13 @@ func (hc *HandlerConfig) handleAsRelay(conn RawConn, frame protocol.Frame, req *
 		"hop", req.HopIndex,
 		"hop_id", fmt.Sprintf("%x", hc.LocalID[:4]),
 	)
+
+	hc.Trace.Add(TraceEvent{
+		Kind:     TraceKindRelayAck,
+		TunnelID: tunnelID.Short(),
+		HopIndex: int(req.HopIndex),
+		From:     ShortID(hc.LocalID),
+	})
 
 	nextReq := *req
 	nextReq.HopIndex = uint8(nextIdx)
@@ -203,6 +222,12 @@ func (hc *HandlerConfig) handleAsDest(conn RawConn, frame protocol.Frame, req *p
 		"tunnel_id", tunnelID.Short(),
 		"ttl_sec", req.TTLSec)
 
+	hc.Trace.Add(TraceEvent{
+		Kind:     TraceKindDestReady,
+		TunnelID: tunnelID.Short(),
+		Details:  map[string]any{"ttl_sec": req.TTLSec},
+	})
+
 	go hc.destDataLoop(conn, tunnelID, e2e)
 	return nil
 }
@@ -215,6 +240,11 @@ func (hc *HandlerConfig) destDataLoop(conn RawConn, tunnelID ID, e2e *E2ESession
 			hc.Log.Debug("tunnel: dest read end",
 				"tunnel_id", tunnelID.Short(),
 				"err", err)
+			hc.Trace.Add(TraceEvent{
+				Kind:     TraceKindSessionClosed,
+				TunnelID: tunnelID.Short(),
+				Details:  map[string]any{"reason": "read_error", "err": err.Error()},
+			})
 			hc.DestSessions.Remove(tunnelID)
 			return
 		}
@@ -224,6 +254,11 @@ func (hc *HandlerConfig) destDataLoop(conn RawConn, tunnelID ID, e2e *E2ESession
 				hc.Log.Warn("tunnel: handle data", "err", err)
 			}
 		case protocol.MsgTunnelClose:
+			hc.Trace.Add(TraceEvent{
+				Kind:     TraceKindSessionClosed,
+				TunnelID: tunnelID.Short(),
+				Details:  map[string]any{"reason": "close"},
+			})
 			hc.DestSessions.Remove(tunnelID)
 			return
 		default:
@@ -259,6 +294,13 @@ func (hc *HandlerConfig) handleDestData(conn RawConn, frame protocol.Frame, e2e 
 		"tunnel_id", tunnelID.Short(),
 		"message_id", fmt.Sprintf("%x", data.MessageID[:4]),
 		"size", len(plaintext))
+
+	hc.Trace.Add(TraceEvent{
+		Kind:      TraceKindDataRecv,
+		TunnelID:  tunnelID.Short(),
+		MessageID: fmt.Sprintf("%x", data.MessageID[:4]),
+		Details:   map[string]any{"size": len(plaintext)},
+	})
 
 	ack := protocol.TunnelAckPayload{
 		TunnelID:  data.TunnelID,

@@ -50,6 +50,7 @@ func (n *Node) initTunnel() error {
 		Log:          n.Log,
 		RelayStore:   tunnel.NewRelayStore(),
 		DestSessions: tunnel.NewDestSessionStore(),
+		Trace:        n.tunnelMgr.Trace,
 	}
 
 	n.tunnelMgr.SetOnMessage(func(msg tunnel.Message) {
@@ -232,6 +233,13 @@ func (s *nodeRouteSource) Ping(addr string) (time.Duration, error) {
 		return 0, err
 	}
 	return time.Since(start), nil
+}
+
+func (n *Node) ExportTunnelTrace(path string) error {
+	if n.tunnelMgr == nil || n.tunnelMgr.Trace == nil {
+		return fmt.Errorf("node: tunnel manager not initialized")
+	}
+	return n.tunnelMgr.Trace.ExportJSON(path)
 }
 
 var (

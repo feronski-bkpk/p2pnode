@@ -114,6 +114,8 @@ type TunnelManager struct {
 	Messages  *MessageStore
 	onMessage func(Message)
 
+	Trace *Trace
+
 	statsMu      sync.Mutex
 	buildsOK     uint64
 	buildsFail   uint64
@@ -153,6 +155,7 @@ func NewTunnelManager(
 		pools:        make(map[[32]byte][]*Session),
 		lastSession:  make(map[[32]byte]*Session),
 		Messages:     NewMessageStore(DefaultMessageStoreSize),
+		Trace:        NewTrace(5000),
 	}
 }
 
@@ -188,6 +191,16 @@ func (m *TunnelManager) buildInternal(destID [32]byte, exclude [][32]byte) (*Ses
 
 	m.logPath(destID, path)
 
+	m.Trace.Add(TraceEvent{
+		Kind: TraceKindRouteBuilt,
+		To:   ShortID(destID),
+		Details: map[string]any{
+			"relays":   len(path) - 2,
+			"excluded": len(exclude),
+			"path_len": len(path),
+		},
+	})
+
 	bc := &BuildCoordinator{
 		LocalID:      m.LocalID,
 		LocalAddr:    m.LocalAddr,
@@ -208,8 +221,28 @@ func (m *TunnelManager) buildInternal(destID [32]byte, exclude [][32]byte) (*Ses
 		m.statsMu.Lock()
 		m.buildsFail++
 		m.statsMu.Unlock()
+		m.Trace.Add(TraceEvent{
+			Kind:    TraceKindBuildFail,
+			To:      ShortID(destID),
+			Details: map[string]any{"err": err.Error()},
+		})
 		return nil, fmt.Errorf("tunnel manager: build: %w", err)
 	}
+
+	hops := make([]string, 0, len(res.Tunnel.Path))
+	for _, h := range res.Tunnel.Path {
+		hops = append(hops, fmt.Sprintf("%x(%s)", h.NodeID[:4], h.Type))
+	}
+	m.Trace.Add(TraceEvent{
+		Kind:     TraceKindBuildOK,
+		TunnelID: res.Tunnel.ID.Short(),
+		To:       ShortID(destID),
+		Details: map[string]any{
+			"hops":          res.Tunnel.NumRelays(),
+			"acks_received": res.ACKCount,
+			"path":          hops,
+		},
+	})
 
 	sess := NewSession(res.Tunnel, res.Conn, res.E2E, m.Log)
 	sess.SetOnMessage(func(msg Message) {
@@ -292,6 +325,15 @@ func (m *TunnelManager) BuildPool(destID [32]byte) ([]*Session, error) {
 		"dest", fmt.Sprintf("%x", destID[:4]),
 		"size", len(sessions),
 		"excluded", len(exclude))
+
+	m.Trace.Add(TraceEvent{
+		Kind: TraceKindPoolBuilt,
+		To:   ShortID(destID),
+		Details: map[string]any{
+			"size":     len(sessions),
+			"excluded": len(exclude),
+		},
+	})
 	return sessions, nil
 }
 
@@ -317,6 +359,13 @@ func (m *TunnelManager) SendMessage(destID [32]byte, text string) (MessageID, er
 	if err != nil {
 		return MessageID{}, err
 	}
+
+	m.Trace.Add(TraceEvent{
+		Kind:      TraceKindSendStart,
+		MessageID: msgID.Short(),
+		To:        ShortID(destID),
+		Details:   map[string]any{"text_len": len(text)},
+	})
 
 	const maxAttempts = 3
 	var lastErr error
@@ -347,7 +396,19 @@ func (m *TunnelManager) SendMessage(destID [32]byte, text string) (MessageID, er
 				m.statsMu.Lock()
 				m.rebuildsOK++
 				m.statsMu.Unlock()
+				m.Trace.Add(TraceEvent{
+					Kind:      TraceKindRebuild,
+					MessageID: msgID.Short(),
+					To:        ShortID(destID),
+					Details:   map[string]any{"attempt": attempt},
+				})
 			}
+			m.Trace.Add(TraceEvent{
+				Kind:      TraceKindSendAck,
+				MessageID: msgID.Short(),
+				To:        ShortID(destID),
+				Details:   map[string]any{"attempt": attempt},
+			})
 			return msgID, nil
 		}
 
@@ -365,6 +426,13 @@ func (m *TunnelManager) SendMessage(destID [32]byte, text string) (MessageID, er
 	m.statsMu.Lock()
 	m.rebuildsFail++
 	m.statsMu.Unlock()
+
+	m.Trace.Add(TraceEvent{
+		Kind:      TraceKindSendFail,
+		MessageID: msgID.Short(),
+		To:        ShortID(destID),
+		Details:   map[string]any{"err": lastErr.Error()},
+	})
 
 	m.Messages.Add(Message{
 		MessageID: msgID,

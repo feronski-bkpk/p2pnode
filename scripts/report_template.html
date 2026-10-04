@@ -7,148 +7,159 @@
   * { box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    margin: 0;
-    padding: 0;
-    background: #f6f8fa;
-    color: #24292f;
-    line-height: 1.5;
+    margin: 0; padding: 0;
+    background: #f6f8fa; color: #24292f; line-height: 1.5;
   }
-  header {
-    background: #24292f;
-    color: #fff;
-    padding: 24px 40px;
-  }
+  header { background: #24292f; color: #fff; padding: 24px 40px; }
   header h1 { margin: 0 0 6px 0; font-size: 24px; }
   header p { margin: 0; opacity: 0.7; font-size: 14px; }
-  main {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 24px 40px;
-  }
+  main { max-width: 1400px; margin: 0 auto; padding: 24px 40px; }
   section {
-    background: #fff;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
-    margin-bottom: 24px;
-    overflow: hidden;
+    background: #fff; border: 1px solid #d0d7de; border-radius: 6px;
+    margin-bottom: 24px; overflow: hidden;
   }
   section > h2 {
-    margin: 0;
-    padding: 16px 20px;
-    font-size: 18px;
-    background: #f6f8fa;
-    border-bottom: 1px solid #d0d7de;
+    margin: 0; padding: 16px 20px; font-size: 18px;
+    background: #f6f8fa; border-bottom: 1px solid #d0d7de;
   }
   section > div { padding: 16px 20px; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  th, td {
-    padding: 8px 12px;
-    text-align: left;
-    border-bottom: 1px solid #d0d7de;
-  }
-  th {
-    background: #f6f8fa;
-    font-weight: 600;
-    cursor: pointer;
-    user-select: none;
-  }
-  th:hover { background: #eef1f4; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #d0d7de; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
   tr:last-child td { border-bottom: none; }
   tr:hover td { background: #f9fafb; }
   .mono {
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     font-size: 12px;
   }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 12px;
+  .hex-preview {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     font-size: 11px;
-    font-weight: 600;
+    background: #0d1117;
+    color: #c9d1d9;
+    padding: 8px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  .hex-cipher { color: #f85149; }
+  .hex-msgpack { color: #8b949e; }
+  .hex-tunnelbuild { color: #3fb950; font-weight: 600; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600;
   }
   .badge-ok { background: #ddf4e0; color: #1a7f37; }
   .badge-warn { background: #fff5cc; color: #9a6700; }
   .badge-err { background: #ffebe9; color: #cf222e; }
+  .badge-opt { background: #dbeafe; color: #1e40af; }
   .metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 12px;
   }
   .metric-card {
-    background: #f6f8fa;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
     padding: 12px;
   }
   .metric-card .label {
-    font-size: 12px;
-    color: #57606a;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 4px;
+    font-size: 12px; color: #57606a; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 4px;
   }
-  .metric-card .value {
-    font-size: 22px;
-    font-weight: 600;
-    color: #24292f;
-  }
-  .metric-card .sub {
-    font-size: 11px;
-    color: #57606a;
-    margin-top: 4px;
-  }
+  .metric-card .value { font-size: 22px; font-weight: 600; color: #24292f; }
+  .metric-card .sub { font-size: 11px; color: #57606a; margin-top: 4px; }
   .controls {
-    margin-bottom: 12px;
-    display: flex;
-    gap: 12px;
-    align-items: center;
+    margin-bottom: 12px; display: flex; gap: 12px; align-items: center;
     flex-wrap: wrap;
   }
   .controls input, .controls select {
-    padding: 6px 10px;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
-    font-size: 13px;
-    font-family: inherit;
+    padding: 6px 10px; border: 1px solid #d0d7de; border-radius: 6px;
+    font-size: 13px; font-family: inherit;
   }
   .controls input { width: 240px; }
   .controls label {
-    font-size: 13px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    font-size: 13px; display: flex; align-items: center; gap: 6px;
     cursor: pointer;
   }
   .legend {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    font-size: 12px;
+    display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px;
     color: #57606a;
   }
   .legend-item { display: flex; align-items: center; gap: 6px; }
   .legend-dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    display: inline-block;
+    width: 10px; height: 10px; border-radius: 50%; display: inline-block;
   }
+  .legend-line { width: 24px; height: 3px; display: inline-block; }
   #graph {
-    width: 100%;
-    height: 640px;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
-    background: #fafbfc;
+    width: 100%; height: 640px;
+    border: 1px solid #d0d7de; border-radius: 6px; background: #fafbfc;
+    overflow: hidden;
+    position: relative;
   }
   #graph svg { display: block; }
-  footer {
-    padding: 24px 40px;
-    text-align: center;
-    color: #57606a;
-    font-size: 12px;
+  #tunnel-graph {
+    width: 100%; height: 640px;
+    border: 1px solid #d0d7de; border-radius: 6px; background: #fafbfc;
+    position: relative;
+    overflow: hidden;
   }
+  #tunnel-graph svg { display: block; }
+  .tooltip {
+    position: absolute; pointer-events: none;
+    background: rgba(36, 41, 47, 0.95); color: #fff;
+    padding: 8px 12px; border-radius: 6px; font-size: 12px;
+    max-width: 360px; z-index: 100; display: none; line-height: 1.4;
+  }
+  .tt-title { font-family: monospace; font-size: 11px; color: #7ee787; margin-bottom: 4px; }
+  .tt-line { font-size: 11px; }
+  .timeline { margin-top: 12px; font-size: 12px; color: #57606a; }
+  .timeline-item {
+    display: flex; gap: 8px; padding: 4px 8px;
+    border-left: 3px solid #d0d7de; margin-bottom: 2px;
+  }
+  .timeline-item.kind-relay_build { border-left-color: #1e40af; }
+  .timeline-item.kind-relay_ack { border-left-color: #60a5fa; }
+  .timeline-item.kind-route_built { border-left-color: #7c3aed; }
+  .timeline-item.kind-build_ok { border-left-color: #059669; }
+  .timeline-item.kind-build_fail { border-left-color: #cf222e; }
+  .timeline-item.kind-send_start { border-left-color: #9a6700; }
+  .timeline-item.kind-send_ack { border-left-color: #16a34a; }
+  .timeline-item.kind-send_fail { border-left-color: #cf222e; }
+  .timeline-item.kind-rebuild { border-left-color: #ea580c; }
+  .timeline-item.kind-pool_built { border-left-color: #7c3aed; }
+  .timeline-item.kind-data_recv { border-left-color: #0891b2; }
+  .timeline-item.kind-dest_ready { border-left-color: #7c3aed; }
+  .timeline-item.kind-session_closed { border-left-color: #9ca3af; }
+  .timeline-time { color: #6b7280; font-family: monospace; min-width: 80px; }
+  .timeline-kind { font-weight: 600; min-width: 130px; }
+  .timeline-detail { font-family: monospace; font-size: 11px; }
+  .ake-svg {
+    display: block; margin: 0 auto; max-width: 720px; width: 100%; height: auto;
+  }
+  footer { padding: 24px 40px; text-align: center; color: #57606a; font-size: 12px; }
+  details.lookup-row { margin: 4px 0; }
+  details.lookup-row > summary {
+    cursor: pointer; padding: 6px 10px; background: #f6f8fa;
+    border-radius: 4px; font-size: 12px;
+  }
+  details.lookup-row > summary:hover { background: #eef1f4; }
+  details.lookup-row[open] > summary { background: #dbeafe; }
+  .lookup-detail {
+    padding: 8px 12px; font-size: 12px;
+    background: #fafbfc; border: 1px solid #d0d7de; border-radius: 4px;
+    margin-top: 4px;
+  }
+  .iter-block { margin: 6px 0; padding: 6px 8px; background: #fff; border-left: 3px solid #7c3aed; }
+  .iter-title { font-weight: 600; font-size: 12px; margin-bottom: 4px; }
+  .contact-chip {
+    display: inline-block; font-family: monospace; font-size: 10px;
+    background: #e5e7eb; padding: 1px 6px; border-radius: 4px;
+    margin: 2px;
+  }
+  .criterion-row { display: flex; gap: 12px; align-items: center; padding: 6px 0; }
+  .criterion-label { flex: 1; font-size: 13px; }
+  .warning { color: #cf222e; font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -160,7 +171,6 @@
 
 <main>
 
-  <!-- ==== Обзор ==== -->
   <section>
     <h2>Обзор</h2>
     <div>
@@ -168,7 +178,11 @@
     </div>
   </section>
 
-  <!-- ==== Граф сети ==== -->
+  <section id="degeneracy-section" style="display:none;">
+    <h2>Невырожденность DHT (E6-3)</h2>
+    <div id="degeneracy-content"></div>
+  </section>
+
   <section>
     <h2>Граф сети</h2>
     <div>
@@ -176,12 +190,13 @@
         <select id="graph-mode">
           <option value="overlay">Overlay (все связи)</option>
           <option value="topk">TopK (3 ближайших по XOR на узел)</option>
-          <option value="tree">Tree (иерархия от seed)</option>
+          <option value="tree">Tree (рёбра seed'а)</option>
         </select>
         <label><input type="checkbox" id="graph-labels" checked> Подписи</label>
-        <label><input type="checkbox" id="graph-arrows" checked> Стрелки</label>
+        <label><input type="checkbox" id="graph-arrows"> Стрелки</label>
+        <label><input type="checkbox" id="graph-mutual"> Только взаимные</label>
         <span class="legend">
-          <span class="legend-item"><span class="legend-dot" style="background:#ffd6a5"></span> seed</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#ffd6a5"></span> seed (max in-degree)</span>
           <span class="legend-item"><span class="legend-dot" style="background:#cfe2ff"></span> узел</span>
           <span class="legend-item">клик — подсветить связи</span>
         </span>
@@ -190,7 +205,95 @@
     </div>
   </section>
 
-  <!-- ==== Routing-таблицы ==== -->
+  <section id="tunnel-section" style="display:none;">
+    <h2>Туннель (E5) — путь через ретрансляторы</h2>
+    <div>
+      <div class="controls">
+        <select id="tunnel-trace"></select>
+        <select id="tunnel-mode">
+          <option value="chain" selected>Только путь туннеля</option>
+          <option value="network">Полный граф сети (путь поверх)</option>
+        </select>
+        <label><input type="checkbox" id="tunnel-animate" checked> Анимация</label>
+        <label><input type="checkbox" id="tunnel-show-events" checked> Временная шкала</label>
+      </div>
+      <div class="legend" style="margin-bottom: 8px;">
+        <span class="legend-item"><span class="legend-dot" style="background:#cfe2ff; border:2px solid #1e40af"></span> инициатор</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#fef3c7; border:2px solid #9a6700"></span> ретранслятор</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#ddf4e0; border:2px solid #1a7f37"></span> получатель</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#e5e7eb; border:1px solid #9ca3af"></span> не участвует</span>
+      </div>
+      <div id="tunnel-graph">
+        <div class="tooltip" id="tunnel-tooltip"></div>
+      </div>
+      <div class="timeline" id="tunnel-timeline"></div>
+    </div>
+  </section>
+
+  <section id="traffic-section" style="display:none;">
+    <h2>Трафик (E4-3, E5-4) — доказательство шифрования</h2>
+    <div id="traffic-content"></div>
+  </section>
+
+  <section id="ake-section">
+    <h2>Handshake AKE (E4-8) — схема</h2>
+    <div>
+      <svg class="ake-svg" viewBox="0 0 720 520" xmlns="http://www.w3.org/2000/svg">
+        <style>
+          .ake-label { font-family: monospace; font-size: 12px; fill: #24292f; }
+          .ake-title { font-family: sans-serif; font-size: 14px; font-weight: 600; fill: #24292f; }
+          .ake-arrow { stroke: #57606a; stroke-width: 1.5; fill: none; }
+          .ake-arrow-head { fill: #57606a; }
+          .ake-phase { fill: #f6f8fa; stroke: #d0d7de; }
+        </style>
+        <text x="60" y="30" class="ake-title">Initiator (Alice)</text>
+        <text x="540" y="30" class="ake-title">Responder (Bob)</text>
+        <line x1="120" y1="40" x2="120" y2="490" stroke="#d0d7de" stroke-dasharray="4 4"/>
+        <line x1="600" y1="40" x2="600" y2="490" stroke="#d0d7de" stroke-dasharray="4 4"/>
+        <text x="130" y="80" class="ake-label">1. HANDSHAKE_HELLO</text>
+        <line x1="120" y1="90" x2="600" y2="90" class="ake-arrow"/>
+        <polygon points="600,90 590,85 590,95" class="ake-arrow-head"/>
+        <text x="130" y="108" class="ake-label" font-size="10" fill="#57606a">{id_pub, eph_pub, rnd_i}</text>
+        <text x="130" y="150" class="ake-label">2. HANDSHAKE_REPLY</text>
+        <line x1="600" y1="160" x2="120" y2="160" class="ake-arrow"/>
+        <polygon points="120,160 130,155 130,165" class="ake-arrow-head"/>
+        <text x="130" y="178" class="ake-label" font-size="10" fill="#57606a">{id_pub, eph_pub, rnd_r, session_id, signature_r}</text>
+        <text x="130" y="220" class="ake-label">3. HANDSHAKE_CONFIRM</text>
+        <line x1="120" y1="230" x2="600" y2="230" class="ake-arrow"/>
+        <polygon points="600,230 590,225 590,235" class="ake-arrow-head"/>
+        <text x="130" y="248" class="ake-label" font-size="10" fill="#57606a">{signature_i}</text>
+        <rect x="60" y="280" width="600" height="100" class="ake-phase" rx="6"/>
+        <text x="80" y="305" class="ake-label" font-weight="600">4 DH (X25519):</text>
+        <text x="80" y="325" class="ake-label" font-size="11">ee = X25519(eph_i_priv, eph_r_pub)</text>
+        <text x="80" y="342" class="ake-label" font-size="11">es = X25519(eph_i_priv, id_r_pub→X25519)</text>
+        <text x="380" y="325" class="ake-label" font-size="11">se = X25519(id_i_priv→X25519, eph_r_pub)</text>
+        <text x="380" y="342" class="ake-label" font-size="11">ss = X25519(id_i_priv→X25519, id_r_pub→X25519)</text>
+        <rect x="60" y="395" width="600" height="80" class="ake-phase" rx="6"/>
+        <text x="80" y="420" class="ake-label" font-weight="600">HKDF:</text>
+        <text x="80" y="440" class="ake-label" font-size="11">ikm = ee || es || se || ss</text>
+        <text x="80" y="457" class="ake-label" font-size="11">salt = SHA-256(transcript)</text>
+        <text x="380" y="440" class="ake-label" font-size="11">k_i→r = HKDF-Expand(HKDF-Extract(salt, ikm), "initiator→responder", 32)</text>
+        <text x="380" y="457" class="ake-label" font-size="11">k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)</text>
+        <text x="300" y="498" class="ake-title" text-anchor="middle">SecureConn (ChaCha20-Poly1305, anti-replay)</text>
+      </svg>
+    </div>
+  </section>
+
+  <section id="lookup-summary-section" style="display:none;">
+    <h2>Lookup-агрегаты (E6-4, E8-5)</h2>
+    <div id="lookup-summary-content"></div>
+  </section>
+
+  <section>
+    <h2>Lookup-логи</h2>
+    <div>
+      <p style="font-size: 12px; color: #57606a; margin-top: 0;">
+        Клик на строку — раскрыть трассу итераций.
+      </p>
+      <div id="lookups-list"></div>
+    </div>
+  </section>
+
   <section>
     <h2>Routing-таблицы</h2>
     <div>
@@ -198,19 +301,15 @@
         <input type="text" id="routing-filter" placeholder="Фильтр по NodeID...">
         <select id="routing-sort">
           <option value="node_id">Сортировка: NodeID</option>
-          <option value="size">Сортировка: size</option>
-          <option value="bucket_count">Сортировка: buckets</option>
-          <option value="max_bucket_fill">Сортировка: max_fill</option>
+          <option value="size">Сортировка: size (убыв.)</option>
+          <option value="bucket_count">Сортировка: buckets (убыв.)</option>
+          <option value="max_bucket_fill">Сортировка: max_fill (убыв.)</option>
         </select>
       </div>
       <table id="routing-table">
         <thead>
           <tr>
-            <th>NodeID</th>
-            <th>Size</th>
-            <th>Buckets</th>
-            <th>Max fill</th>
-            <th>Min fill</th>
+            <th>NodeID</th><th>Size</th><th>Buckets</th><th>Max fill</th><th>Min fill</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -218,35 +317,11 @@
     </div>
   </section>
 
-  <!-- ==== Lookup-логи ==== -->
-  <section>
-    <h2>Lookup-логи</h2>
-    <div>
-      <table id="lookups-table">
-        <thead>
-          <tr>
-            <th>Target</th>
-            <th>Initiator</th>
-            <th>Absent</th>
-            <th>RPC</th>
-            <th>Iters</th>
-            <th>Timeouts</th>
-            <th>Duration</th>
-            <th>Found</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- ==== Сравнение bootstrap-схем ==== -->
   <section id="star-ring-section" style="display:none;">
     <h2>Star vs Ring</h2>
     <div id="star-ring-content"></div>
   </section>
 
-  <!-- ==== Сравнение сериализаций ==== -->
   <section id="serialization-section" style="display:none;">
     <h2>Сериализация: msgpack / JSON / gob</h2>
     <div id="serialization-content"></div>
@@ -259,32 +334,74 @@
 </footer>
 
 <script>
-// ==== Встроенный D3.js ====
 __D3_INLINE__
 
-// ==== Встроенные данные ====
 const REPORT_DATA = __REPORT_DATA__;
 
-// ==== Обзор ====
+// ===================================================================
+// Helpers
+// ===================================================================
+function resolveId(short, allRouting) {
+  if (!short) return null;
+  const s = String(short).toLowerCase();
+  if (!/^[0-9a-f]+$/.test(s)) return null;
+  // Если уже полный ID (64 hex) — вернуть как есть.
+  if (s.length === 64 && allRouting.some(r => r.node_id.toLowerCase() === s)) {
+    return allRouting.find(r => r.node_id.toLowerCase() === s).node_id;
+  }
+  const matches = allRouting.filter(r =>
+    r.node_id.toLowerCase().startsWith(s)
+  );
+  if (matches.length === 1) return matches[0].node_id;
+  return null;
+}
+
+function shortId(id) {
+  if (!id) return '—';
+  return id.slice(0, 8);
+}
+
+// ===================================================================
+// Overview
+// ===================================================================
 (function renderOverview() {
   const el = document.getElementById('overview-metrics');
-  const routing = REPORT_DATA.routing || [];
-  const lookups = REPORT_DATA.lookups || [];
-
-  const totalNodes = routing.length;
-  const sizes = routing.map(r => r.size || 0);
-  const meanSize = sizes.length ? sizes.reduce((a, b) => a + b, 0) / sizes.length : 0;
-
-  const lookupRPC = lookups.map(l => l.rpc || 0);
-  const meanRPC = lookupRPC.length ? lookupRPC.reduce((a, b) => a + b, 0) / lookupRPC.length : 0;
-  const successCount = lookups.filter(l => l.found).length;
+  const ov = REPORT_DATA.overview || {};
+  const deg = REPORT_DATA.degeneracy;
 
   const cards = [
-    { label: 'Nodes', value: totalNodes, sub: 'routing snapshots' },
-    { label: 'Mean table size', value: meanSize.toFixed(2), sub: `min=${Math.min(...sizes, 0)} max=${Math.max(...sizes, 0)}` },
-    { label: 'Lookups', value: lookups.length, sub: 'total' },
-    { label: 'Mean RPC', value: meanRPC.toFixed(2), sub: 'per lookup' },
-    { label: 'Successful lookups', value: `${successCount}/${lookups.length}`, sub: lookups.length ? `${(successCount/lookups.length*100).toFixed(1)}%` : '—' },
+    { label: 'Узлов', value: ov.nodes || 0, sub: 'routing snapshots' },
+    {
+      label: 'Рёбер',
+      value: ov.edges || 0,
+      sub: `mutual=${ov.mutual_edges || 0} asym=${ov.asym_edges || 0}`
+    },
+    {
+      label: 'Таблица (mean)',
+      value: (ov.mean_size || 0).toFixed(2),
+      sub: `min=${ov.min_size || 0} max=${ov.max_size || 0}`
+    },
+    {
+      label: 'Lookups',
+      value: ov.lookups_available
+        ? `${ov.lookups_ok || 0}/${ov.lookups_total || 0}`
+        : '—',
+      sub: ov.lookups_available
+        ? `${(100 * ov.lookups_ok / ov.lookups_total).toFixed(1)}% успешных`
+        : 'lookup-логи не найдены'
+    },
+    {
+      label: 'Туннель (traces)',
+      value: ov.traces_total || 0,
+      sub: `${ov.trace_events || 0} событий`
+    },
+    {
+      label: 'DHT-статус',
+      value: deg ? (deg.all_ok ? 'OK' : 'FAIL') : '—',
+      sub: deg
+        ? `${deg.pct_less.toFixed(1)}% с <${deg.full_registry_size} контактов`
+        : 'нет данных'
+    },
   ];
 
   el.innerHTML = cards.map(c => `
@@ -296,69 +413,157 @@ const REPORT_DATA = __REPORT_DATA__;
   `).join('');
 })();
 
-// ==== Граф сети через D3.js ====
+// ===================================================================
+// Degeneracy (E6-3)
+// ===================================================================
+(function renderDegeneracy() {
+  const deg = REPORT_DATA.degeneracy;
+  if (!deg) return;
+  document.getElementById('degeneracy-section').style.display = 'block';
+  const el = document.getElementById('degeneracy-content');
+
+  function badge(ok, label) {
+    if (ok === null || ok === undefined) {
+      return `<span class="badge badge-warn">${label} —</span>`;
+    }
+    return ok
+      ? `<span class="badge badge-ok">${label} ✓</span>`
+      : `<span class="badge badge-err">${label} ✗</span>`;
+  }
+
+  let html = `
+    <div class="criterion-row">
+      <span class="criterion-label">
+        <b>Критерий 1:</b> ≥80% узлов имеют &lt; N-1 контактов
+        (N=${deg.n}, N-1=${deg.full_registry_size}).
+      </span>
+      ${badge(deg.crit1_ok, `${deg.pct_less.toFixed(1)}%`)}
+    </div>
+    <div class="criterion-row">
+      <span class="criterion-label">
+        <b>Критерий 1b:</b> ни один узел не имеет полный реестр.
+      </span>
+      ${badge(deg.crit1b_ok, `max=${deg.size_max}`)}
+    </div>
+    <div class="criterion-row">
+      <span class="criterion-label">
+        <b>Критерий 2:</b> все lookup'ы — с target, отсутствовавшим до старта.
+      </span>
+      ${badge(deg.crit2_ok, 'absent_at_start')}
+    </div>
+    <div class="criterion-row">
+      <span class="criterion-label">
+        <b>Критерий 3:</b> все lookup'ы прошли через промежуточный узел (RPC ≥ 2).
+      </span>
+      ${badge(deg.crit3_ok, 'intermediate')}
+    </div>
+
+    <h3 style="margin-top:18px;">Результат</h3>
+    <p>
+      ${deg.all_ok
+        ? '<span class="badge badge-ok" style="font-size:14px;">NON-DEGENERATE — все критерии выполнены</span>'
+        : '<span class="badge badge-err" style="font-size:14px;">DEGENERATE — не все критерии выполнены</span>'}
+    </p>
+
+    <h3>Таблица размеров</h3>
+    <table>
+      <thead><tr>
+        <th>NodeID</th><th>Size</th><th>% от N-1</th><th>Вердикт</th>
+      </tr></thead>
+      <tbody>
+  `;
+
+  for (const p of deg.per_node) {
+    html += `<tr>
+      <td class="mono">${shortId(p.node_id)}</td>
+      <td>${p.size}</td>
+      <td>${p.pct_of_full.toFixed(1)}%</td>
+      <td>${p.ok
+        ? '<span class="badge badge-ok">ok</span>'
+        : '<span class="badge badge-err">full</span>'}</td>
+    </tr>`;
+  }
+
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+})();
+
+// ===================================================================
+// Graph
+// ===================================================================
 (function renderGraph() {
   const graphEl = document.getElementById('graph');
   const modeSelect = document.getElementById('graph-mode');
   const labelsCheckbox = document.getElementById('graph-labels');
   const arrowsCheckbox = document.getElementById('graph-arrows');
+  const mutualCheckbox = document.getElementById('graph-mutual');
 
   if (!window.d3) {
     graphEl.innerHTML = '<p style="padding:20px;color:#cf222e;">D3.js не загружен.</p>';
     return;
   }
   const d3 = window.d3;
-
   const routing = REPORT_DATA.routing || [];
   const rawEdges = REPORT_DATA.edges || [];
 
   if (!routing.length) {
-    graphEl.innerHTML = '<p style="padding:20px;color:#57606a;">Нет данных routing.</p>';
+    graphEl.innerHTML = '<p style="padding:20px;color:#57606a;">Нет данных routing. Запустите run_experiment.sh.</p>';
     return;
   }
 
-  // Определяем seed — узел с максимальным out-degree.
-  const outDeg = {};
-  for (const e of rawEdges) {
-    outDeg[e.source] = (outDeg[e.source] || 0) + 1;
-  }
-  let seedId = null;
-  let maxDeg = -1;
-  for (const [id, d] of Object.entries(outDeg)) {
-    if (d > maxDeg) { maxDeg = d; seedId = id; }
+  // Известные ID + проверка orphan edges.
+  const knownIds = new Set(routing.map(r => r.node_id));
+  const orphans = rawEdges.filter(e => !knownIds.has(e.source) || !knownIds.has(e.target));
+  if (orphans.length) {
+    console.warn(`[report] orphan edges: ${orphans.length}`, orphans.slice(0, 5));
   }
 
-  // Узлы.
+  // seed = max in-degree.
+  const inDeg = {};
+  for (const e of rawEdges) inDeg[e.target] = (inDeg[e.target] || 0) + 1;
+  let seedId = null, maxIn = -1;
+  for (const [id, d] of Object.entries(inDeg)) {
+    if (d > maxIn) { maxIn = d; seedId = id; }
+  }
+
+  // Множество mutual-рёбер.
+  const edgeSet = new Set(rawEdges.map(e => `${e.source}|${e.target}`));
+  function isMutual(src, dst) {
+    return edgeSet.has(`${dst}|${src}`);
+  }
+
   const nodes = routing.map(r => ({
     id: r.node_id,
     short: r.node_id.slice(0, 8),
     size: r.size || 0,
     isSeed: r.node_id === seedId,
   }));
-  const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-  // Функция получения рёбер в зависимости от режима.
   function getEdges(mode) {
-    if (mode === 'overlay') {
-      return rawEdges.map(e => ({ source: e.source, target: e.target }));
+    let base = rawEdges.map(e => ({ source: e.source, target: e.target }));
+    if (mutualCheckbox.checked) {
+      base = base.filter(e => isMutual(e.source, e.target));
     }
+    if (mode === 'overlay') return base;
+
     if (mode === 'topk') {
-      // 3 ближайших по XOR на узел.
+      // Только существующие рёбра, отсортированные по XOR, топ-3 на узел.
       const bySrc = {};
-      for (const e of rawEdges) {
-        (bySrc[e.source] = bySrc[e.source] || []).push(e.target);
-      }
-      const out = [];
-      const seen = new Set();
+      for (const e of base) (bySrc[e.source] = bySrc[e.source] || []).push(e.target);
+      const out = [], seen = new Set();
       for (const [src, dsts] of Object.entries(bySrc)) {
-        const srcNum = BigInt('0x' + src);
-        const sorted = dsts.slice().sort((a, b) => {
-          const da = srcNum ^ BigInt('0x' + a);
-          const db = srcNum ^ BigInt('0x' + b);
+        if (!/^[0-9a-f]+$/i.test(src)) continue;
+        let srcNum;
+        try { srcNum = BigInt('0x' + src); } catch { continue; }
+        const valid = dsts.filter(d => /^[0-9a-f]+$/i.test(d));
+        valid.sort((a, b) => {
+          let da, db;
+          try { da = srcNum ^ BigInt('0x' + a); } catch { return 0; }
+          try { db = srcNum ^ BigInt('0x' + b); } catch { return 0; }
           return da < db ? -1 : da > db ? 1 : 0;
         });
-        for (const d of sorted.slice(0, 3)) {
-          const key = `${src}->${d}`;
+        for (const d of valid.slice(0, 3)) {
+          const key = `${src}|${d}`;
           if (seen.has(key)) continue;
           seen.add(key);
           out.push({ source: src, target: d });
@@ -366,151 +571,123 @@ const REPORT_DATA = __REPORT_DATA__;
       }
       return out;
     }
+
     if (mode === 'tree') {
-      // Рёбра от seed к его контактам.
-      return rawEdges
-        .filter(e => e.source === seedId)
-        .map(e => ({ source: e.source, target: e.target }));
+      if (!seedId) return [];
+      return base.filter(e => e.source === seedId);
     }
     return [];
   }
 
-  let simulation;
-  let svg;
+  let simulation = null;
+  let svg = null;
 
   function render() {
+    if (simulation) { simulation.stop(); simulation = null; }
     const mode = modeSelect.value;
     const showLabels = labelsCheckbox.checked;
     const showArrows = arrowsCheckbox.checked;
 
-    // Очищаем.
     graphEl.innerHTML = '';
-
     const width = graphEl.clientWidth || 1000;
     const height = graphEl.clientHeight || 640;
-
+    const cx = width / 2, cy = height / 2;
     const edges = getEdges(mode);
-
-    // Копируем узлы, чтобы D3 не мутировал оригинал.
     const simNodes = nodes.map(n => ({ ...n }));
-    const simEdges = edges.map(e => ({
-      source: e.source,
-      target: e.target,
-    }));
+    const simEdges = edges.map(e => ({ source: e.source, target: e.target }));
 
-    svg = d3.select(graphEl)
-      .append('svg')
-      .attr('width', width)
-      .attr('height', height)
+    svg = d3.select(graphEl).append('svg')
+      .attr('width', width).attr('height', height)
       .attr('viewBox', [0, 0, width, height]);
 
-    // Стрелки.
     if (showArrows) {
-      svg.append('defs')
-        .append('marker')
-        .attr('id', 'arrow')
-        .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 18)
-        .attr('refY', 0)
-        .attr('markerWidth', 6)
-        .attr('markerHeight', 6)
+      svg.append('defs').append('marker')
+        .attr('id', 'arrow').attr('viewBox', '0 -5 10 10')
+        .attr('refX', 18).attr('refY', 0)
+        .attr('markerWidth', 6).attr('markerHeight', 6)
         .attr('orient', 'auto')
-        .append('path')
-        .attr('d', 'M0,-5L10,0L0,5')
-        .attr('fill', '#888888');
+        .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#888888');
     }
 
-    const link = svg.append('g')
-      .selectAll('line')
-      .data(simEdges)
-      .join('line')
-      .attr('stroke', '#888888')
-      .attr('stroke-width', 1)
-      .attr('stroke-opacity', 0.5)
+    const link = svg.append('g').selectAll('line').data(simEdges).join('line')
+      .attr('stroke', e => isMutual(e.source, e.target) ? '#16a34a' : '#dc2626')
+      .attr('stroke-width', 1.2)
+      .attr('stroke-opacity', 0.55)
       .attr('marker-end', showArrows ? 'url(#arrow)' : null);
 
-    const node = svg.append('g')
-      .selectAll('circle')
-      .data(simNodes)
-      .join('circle')
-      .attr('r', d => 8 + Math.min(d.size, 12))
+    const node = svg.append('g').selectAll('circle').data(simNodes).join('circle')
+      .attr('r', d => 9 + Math.min(d.size, 12))
       .attr('fill', d => d.isSeed ? '#ffd6a5' : '#cfe2ff')
-      .attr('stroke', '#24292f')
-      .attr('stroke-width', 1.5)
+      .attr('stroke', '#24292f').attr('stroke-width', 1.5)
       .style('cursor', 'pointer')
       .call(d3.drag()
-        .on('start', dragStart)
-        .on('drag', dragged)
-        .on('end', dragEnd));
+        .on('start', dragStart).on('drag', dragged).on('end', dragEnd));
 
-    // Подписи.
     let label = null;
     if (showLabels) {
-      label = svg.append('g')
-        .selectAll('text')
-        .data(simNodes)
-        .join('text')
+      label = svg.append('g').selectAll('text').data(simNodes).join('text')
         .text(d => d.short)
-        .attr('font-family', 'Helvetica, sans-serif')
-        .attr('font-size', 11)
+        .attr('font-family', 'monospace').attr('font-size', 10)
         .attr('text-anchor', 'middle')
-        .attr('dy', d => 8 + Math.min(d.size, 12) + 12)
-        .style('pointer-events', 'none')
-        .style('user-select', 'none');
+        .attr('dy', d => 9 + Math.min(d.size, 12) + 12)
+        .style('pointer-events', 'none').style('user-select', 'none');
     }
 
-    // Подсветка при клике.
+    // Tooltip.
+    const tip = svg.append('foreignObject').style('display', 'none');
     let selected = null;
+
     node.on('click', (event, d) => {
       event.stopPropagation();
       if (selected === d.id) {
         selected = null;
         node.attr('stroke-width', 1.5).attr('stroke', '#24292f');
-        link.attr('stroke-opacity', 0.5).attr('stroke', '#888888');
+        link.attr('stroke-opacity', 0.55).attr('stroke', e =>
+          isMutual(e.source, e.target) ? '#16a34a' : '#dc2626');
       } else {
         selected = d.id;
         node.attr('stroke-width', d2 => d2.id === selected ? 4 : 1.5)
             .attr('stroke', d2 => d2.id === selected ? '#cf222e' : '#24292f');
-        link.attr('stroke-opacity', e => (e.source.id === selected || e.target.id === selected) ? 1 : 0.1)
-            .attr('stroke', e => (e.source.id === selected || e.target.id === selected) ? '#cf222e' : '#888888');
+        link.attr('stroke-opacity', e =>
+              (e.source.id === selected || e.target.id === selected) ? 1 : 0.08)
+            .attr('stroke', e =>
+              (e.source.id === selected || e.target.id === selected) ? '#cf222e'
+              : (isMutual(e.source, e.target) ? '#16a34a' : '#dc2626'));
       }
     });
 
     svg.on('click', () => {
       selected = null;
       node.attr('stroke-width', 1.5).attr('stroke', '#24292f');
-      link.attr('stroke-opacity', 0.5).attr('stroke', '#888888');
+      link.attr('stroke-opacity', 0.55).attr('stroke', e =>
+        isMutual(e.source, e.target) ? '#16a34a' : '#dc2626');
     });
 
-    // Симуляция.
     simulation = d3.forceSimulation(simNodes)
-      .force('link', d3.forceLink(simEdges).id(d => d.id).distance(80))
-      .force('charge', d3.forceManyBody().strength(-300))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(d => 8 + Math.min(d.size, 12) + 4))
+      .randomSource(d3.randomLcg(0.42))
+      .force('link', d3.forceLink(simEdges).id(d => d.id).distance(70).strength(0.4))
+      .force('charge', d3.forceManyBody().strength(-160).distanceMax(350))
+      .force('center', d3.forceCenter(cx, cy))
+      .force('x', d3.forceX(cx).strength(0.06))
+      .force('y', d3.forceY(cy).strength(0.06))
+      .force('collision', d3.forceCollide().radius(d => 9 + Math.min(d.size, 12) + 6))
+      .alphaDecay(0.05)
       .on('tick', () => {
-        link
-          .attr('x1', d => d.source.x)
-          .attr('y1', d => d.source.y)
-          .attr('x2', d => d.target.x)
-          .attr('y2', d => d.target.y);
-        node
-          .attr('cx', d => d.x)
-          .attr('cy', d => d.y);
-        if (label) {
-          label
-            .attr('x', d => d.x)
-            .attr('y', d => d.y);
-        }
+        simNodes.forEach(d => {
+          d.x = Math.max(30, Math.min(width - 30, d.x));
+          d.y = Math.max(30, Math.min(height - 30, d.y));
+        });
+        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        node.attr('cx', d => d.x).attr('cy', d => d.y);
+        if (label) label.attr('x', d => d.x).attr('y', d => d.y);
       });
 
     function dragStart(event, d) {
       if (!event.active) simulation.alphaTarget(0.3).restart();
       d.fx = d.x; d.fy = d.y;
     }
-    function dragged(event, d) {
-      d.fx = event.x; d.fy = event.y;
-    }
+    function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
     function dragEnd(event, d) {
       if (!event.active) simulation.alphaTarget(0);
       d.fx = null; d.fy = null;
@@ -520,36 +697,556 @@ const REPORT_DATA = __REPORT_DATA__;
   modeSelect.addEventListener('change', render);
   labelsCheckbox.addEventListener('change', render);
   arrowsCheckbox.addEventListener('change', render);
+  mutualCheckbox.addEventListener('change', render);
   window.addEventListener('resize', () => {
     clearTimeout(window.__graphResizeTimer);
     window.__graphResizeTimer = setTimeout(render, 200);
+  });
+  render();
+})();
+
+// ===================================================================
+// Tunnel graph
+// ===================================================================
+(function renderTunnel() {
+  const traces = REPORT_DATA.traces || [];
+  if (!traces.length) return;
+
+  document.getElementById('tunnel-section').style.display = 'block';
+  const traceSelect = document.getElementById('tunnel-trace');
+  const modeSelect = document.getElementById('tunnel-mode');
+  const animCheckbox = document.getElementById('tunnel-animate');
+  const showEventsCheckbox = document.getElementById('tunnel-show-events');
+  const graphEl = document.getElementById('tunnel-graph');
+  const timelineEl = document.getElementById('tunnel-timeline');
+
+  if (!window.d3) return;
+  const d3 = window.d3;
+
+  traceSelect.innerHTML = traces.map((t, i) =>
+    `<option value="${i}">${t.source} (${t.count} events)</option>`
+  ).join('');
+
+  const allRouting = REPORT_DATA.routing || [];
+  const allEdges = REPORT_DATA.edges || [];
+
+  let animTimer = null;
+  let simulationRef = null;
+
+  // Извлекаем цепочку из событий trace'а.
+  // Возвращает полные ID (resolved через allRouting).
+  function extractChain(events) {
+    let initiator = null, dest = null;
+    const relayByHop = {};
+
+    for (const ev of events) {
+      // build_ok содержит полный path: ["xxxx(initiator)", ..., "yyyy(dest)"].
+      if (ev.kind === 'build_ok' && ev.details && Array.isArray(ev.details.path)) {
+        const path = ev.details.path;
+        if (path.length >= 2) {
+          const iShort = String(path[0] || '').split('(')[0];
+          const dShort = String(path[path.length - 1] || '').split('(')[0];
+          initiator = initiator || resolveId(iShort, allRouting) || iShort;
+          dest = dest || resolveId(dShort, allRouting) || dShort;
+
+          for (let i = 1; i < path.length - 1; i++) {
+            const parts = String(path[i]).split('(');
+            const idShort = parts[0];
+            const role = (parts[1] || '').replace(')', '');
+            if (role === 'relay' && idShort) {
+              relayByHop[i] = resolveId(idShort, allRouting) || idShort;
+            }
+          }
+        }
+      }
+
+      // send_start.to / send_ack.to — короткие ID dest'а.
+      if (ev.kind === 'send_start' && ev.to) {
+        dest = dest || resolveId(ev.to, allRouting) || ev.to;
+      }
+      if (ev.kind === 'send_ack' && ev.to) {
+        dest = dest || resolveId(ev.to, allRouting) || ev.to;
+      }
+
+      // Если попались события конкретного релея (relay_build/relay_ack),
+      // используем hop_index.
+      if ((ev.kind === 'relay_build' || ev.kind === 'relay_ack') &&
+          ev.hop_index > 0) {
+        // У relay_build/relay_ack "from" — это ID инициатора для ack,
+        // а сам ретранслятор = источник события. В нашем trace source
+        // известен как t.source, но здесь мы не знаем его ID по имени.
+        // Пропускаем — эти события полезны только для таймлайна.
+      }
+    }
+
+    const hopIndices = Object.keys(relayByHop).map(Number).sort((a, b) => a - b);
+    const hops = hopIndices.map(i => relayByHop[i]).filter(Boolean);
+    return { initiator, dest, hops };
+  }
+
+  function render() {
+    if (animTimer) { clearInterval(animTimer); animTimer = null; }
+    if (simulationRef) { simulationRef.stop(); simulationRef = null; }
+
+    const idx = parseInt(traceSelect.value, 10) || 0;
+    const trace = traces[idx];
+    if (!trace) return;
+    const mode = modeSelect.value;
+
+    const events = trace.events || [];
+    const { initiator, dest, hops } = extractChain(events);
+    const chain = [initiator, ...hops, dest].filter(x => x);
+    const chainSet = new Set(chain);
+
+    let nodes, edges;
+
+    if (mode === 'chain') {
+      nodes = chain.map((id, i) => ({
+        id, short: id.slice(0, 8), size: 0,
+        role: i === 0 ? 'initiator' : (i === chain.length - 1 ? 'dest' : 'relay'),
+      }));
+      edges = [];
+      for (let i = 0; i < chain.length - 1; i++) {
+        edges.push({ source: chain[i], target: chain[i + 1], kind: 'tunnel' });
+      }
+    } else {
+      nodes = allRouting.map(r => {
+        let role = 'other';
+        if (r.node_id === initiator) role = 'initiator';
+        else if (r.node_id === dest) role = 'dest';
+        else if (chainSet.has(r.node_id)) role = 'relay';
+        return { id: r.node_id, short: r.node_id.slice(0, 8), size: r.size || 0, role };
+      });
+      for (const id of chain) {
+        if (!nodes.find(n => n.id === id)) {
+          nodes.push({
+            id, short: id.slice(0, 8), size: 1,
+            role: id === initiator ? 'initiator' : id === dest ? 'dest' : 'relay',
+          });
+        }
+      }
+
+      edges = [];
+      const seen = new Set();
+      for (const e of allEdges) {
+        const key = `${e.source}|${e.target}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push({ source: e.source, target: e.target, kind: 'network' });
+      }
+      for (let i = 0; i < chain.length - 1; i++) {
+        edges.push({ source: chain[i], target: chain[i + 1], kind: 'tunnel' });
+      }
+    }
+
+    graphEl.innerHTML = '';
+    const tooltipNew = document.createElement('div');
+    tooltipNew.className = 'tooltip';
+    tooltipNew.id = 'tunnel-tooltip';
+    graphEl.appendChild(tooltipNew);
+    const tooltip = d3.select(tooltipNew);
+
+    const width = graphEl.clientWidth || 1000;
+    const height = graphEl.clientHeight || 640;
+    const cx = width / 2;
+    const cy = height / 2;
+
+    const svg = d3.select(graphEl).append('svg')
+      .attr('width', width).attr('height', height)
+      .attr('viewBox', [0, 0, width, height]);
+
+    svg.append('defs').append('marker')
+      .attr('id', 'arrow-tunnel').attr('viewBox', '0 -5 10 10')
+      .attr('refX', 22).attr('refY', 0)
+      .attr('markerWidth', 7).attr('markerHeight', 7)
+      .attr('orient', 'auto')
+      .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#cf222e');
+
+    const simNodes = nodes.map(n => ({ ...n }));
+    const simEdges = edges.map(e => ({ source: e.source, target: e.target, kind: e.kind }));
+
+    const simulation = d3.forceSimulation(simNodes)
+      .randomSource(d3.randomLcg(0.42))
+      .force('link', d3.forceLink(simEdges).id(d => d.id)
+        .distance(d => d.kind === 'tunnel' ? 130 : 90)
+        .strength(0.4))
+      .force('charge', d3.forceManyBody().strength(-300).distanceMax(500))
+      .force('center', d3.forceCenter(cx, cy))
+      .force('x', d3.forceX(cx).strength(0.05))
+      .force('y', d3.forceY(cy).strength(0.05))
+      .force('collision', d3.forceCollide().radius(36))
+      .alphaDecay(0.05);
+    simulationRef = simulation;
+
+    simulation.on('tick', () => {
+      simNodes.forEach(d => {
+        d.x = Math.max(40, Math.min(width - 40, d.x));
+        d.y = Math.max(40, Math.min(height - 40, d.y));
+      });
+      link
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      node.attr('cx', d => d.x).attr('cy', d => d.y);
+      label.attr('x', d => d.x).attr('y', d => d.y);
+      roleLabel.attr('x', d => d.x).attr('y', d => d.y);
+      if (packets) {
+        packets
+          .attr('cx', d => {
+            const e = edges[d.edgeIdx];
+            if (!e || !e.source || e.source.x == null) return 0;
+            const t = (d.t + tick) % 1;
+            return e.source.x + (e.target.x - e.source.x) * t;
+          })
+          .attr('cy', d => {
+            const e = edges[d.edgeIdx];
+            if (!e || !e.source || e.source.y == null) return 0;
+            const t = (d.t + tick) % 1;
+            return e.source.y + (e.target.y - e.source.y) * t;
+          });
+      }
+    });
+
+    const link = svg.append('g').selectAll('line').data(simEdges).join('line')
+      .attr('stroke', d => d.kind === 'tunnel' ? '#cf222e' : '#888888')
+      .attr('stroke-width', d => d.kind === 'tunnel' ? 3 : 1)
+      .attr('stroke-opacity', d => d.kind === 'tunnel' ? 0.95 : 0.18)
+      .attr('marker-end', d => d.kind === 'tunnel' ? 'url(#arrow-tunnel)' : null);
+
+    const node = svg.append('g').selectAll('circle').data(simNodes).join('circle')
+      .attr('r', 18)
+      .attr('fill', d => ({
+        initiator: '#cfe2ff',
+        relay: '#fef3c7',
+        dest: '#ddf4e0',
+        other: '#e5e7eb',
+      })[d.role])
+      .attr('stroke', d => ({
+        initiator: '#1e40af',
+        relay: '#9a6700',
+        dest: '#1a7f37',
+        other: '#9ca3af',
+      })[d.role])
+      .attr('stroke-width', d => d.role === 'other' ? 1 : 2.5)
+      .attr('opacity', d => d.role === 'other' ? 0.45 : 1)
+      .style('cursor', 'pointer')
+      .on('mouseover', function (event, d) {
+        const roleText = d.role === 'other' ? 'не участник туннеля' : d.role;
+        const seesText = d.role === 'relay'
+          ? 'видит: tunnel_id, next_hop; НЕ видит payload'
+          : d.role === 'initiator' ? 'шифрует E2E, отправляет'
+          : d.role === 'dest' ? 'расшифровывает E2E'
+          : '—';
+        const rect = graphEl.getBoundingClientRect();
+        tooltip.style('display', 'block')
+          .style('left', (event.clientX - rect.left + 12) + 'px')
+          .style('top', (event.clientY - rect.top + 12) + 'px')
+          .html(`<div class="tt-title">${d.id.slice(0, 16)}…</div>
+                 <div class="tt-line">role: ${roleText}</div>
+                 <div class="tt-line">${seesText}</div>`);
+      })
+      .on('mousemove', function (event) {
+        const rect = graphEl.getBoundingClientRect();
+        tooltip.style('left', (event.clientX - rect.left + 12) + 'px')
+               .style('top', (event.clientY - rect.top + 12) + 'px');
+      })
+      .on('mouseout', function () { tooltip.style('display', 'none'); });
+
+    const label = svg.append('g').selectAll('text').data(simNodes).join('text')
+      .text(d => d.short)
+      .attr('font-family', 'monospace').attr('font-size', 10)
+      .attr('text-anchor', 'middle').attr('dy', 30)
+      .style('pointer-events', 'none').style('user-select', 'none');
+
+    const roleLabel = svg.append('g').selectAll('text').data(simNodes).join('text')
+      .text(d => d.role === 'other' ? '' : d.role)
+      .attr('font-family', 'sans-serif').attr('font-size', 9)
+      .attr('text-anchor', 'middle').attr('dy', -22)
+      .attr('fill', '#57606a')
+      .style('pointer-events', 'none');
+
+    // Анимация пакетов.
+    let packets = null;
+    let tick = 0;
+    if (animCheckbox.checked && chain.length > 1) {
+      const packetData = [];
+      for (let i = 0; i < chain.length - 1; i++) {
+        for (let j = 0; j < simEdges.length; j++) {
+          const e = simEdges[j];
+          if (e.source.id === chain[i] && e.target.id === chain[i + 1]) {
+            packetData.push({ edgeIdx: j, t: 0 });
+            packetData.push({ edgeIdx: j, t: 0.5 });
+          }
+        }
+      }
+      packets = svg.append('g').selectAll('circle').data(packetData).join('circle')
+        .attr('r', 6).attr('fill', '#cf222e').attr('opacity', 0.9);
+
+      animTimer = setInterval(() => {
+        tick = (tick + 0.02) % 1;
+        if (!packets) return;
+        packets
+          .attr('cx', d => {
+            const e = edges[d.edgeIdx];
+            if (!e || !e.source || e.source.x == null) return 0;
+            const t = (d.t + tick) % 1;
+            return e.source.x + (e.target.x - e.source.x) * t;
+          })
+          .attr('cy', d => {
+            const e = edges[d.edgeIdx];
+            if (!e || !e.source || e.source.y == null) return 0;
+            const t = (d.t + tick) % 1;
+            return e.source.y + (e.target.y - e.source.y) * t;
+          });
+      }, 40);
+    }
+
+    // Временная шкала.
+    if (showEventsCheckbox.checked) {
+      const rows = events.slice(-80).map(ev => {
+        const time = (ev.time || '').replace('T', ' ').slice(11, 23);
+        const kind = ev.kind || '';
+        const detail = [];
+        if (ev.tunnel_id) detail.push(`tid=${ev.tunnel_id}`);
+        if (ev.message_id) detail.push(`mid=${ev.message_id}`);
+        if (ev.hop_index) detail.push(`hop=${ev.hop_index}`);
+        if (ev.from) detail.push(`from=${ev.from}`);
+        if (ev.to) detail.push(`to=${ev.to}`);
+        if (ev.details) {
+          for (const [k, v] of Object.entries(ev.details)) {
+            if (k === 'path') {
+              detail.push(`path=[${v.map(p => p.split('(')[0]).join('→')}]`);
+            } else {
+              detail.push(`${k}=${JSON.stringify(v)}`);
+            }
+          }
+        }
+        return `<div class="timeline-item kind-${kind}">
+          <span class="timeline-time">${time}</span>
+          <span class="timeline-kind">${kind}</span>
+          <span class="timeline-detail">${detail.join(' ')}</span>
+        </div>`;
+      }).join('');
+      timelineEl.innerHTML = `<div style="max-height:320px;overflow-y:auto;">${rows}</div>`;
+    } else {
+      timelineEl.innerHTML = '';
+    }
+  }
+
+  traceSelect.addEventListener('change', render);
+  modeSelect.addEventListener('change', render);
+  animCheckbox.addEventListener('change', render);
+  showEventsCheckbox.addEventListener('change', render);
+  window.addEventListener('resize', () => {
+    clearTimeout(window.__tunnelResizeTimer);
+    window.__tunnelResizeTimer = setTimeout(render, 200);
   });
 
   render();
 })();
 
-// ==== Routing-таблица ====
+// ===================================================================
+// Traffic (E4-3, E5-4)
+// ===================================================================
+(function renderTraffic() {
+  const v = REPORT_DATA.verify;
+  if (!v) return;
+  document.getElementById('traffic-section').style.display = 'block';
+  const el = document.getElementById('traffic-content');
+  const frames = v.frames || [];
+
+  const summaryRows = [
+    ['Секрет', `<span class="mono">${v.secret || '—'}</span>`],
+    ['pcap-файл', `<span class="mono">${v.pcap || '—'}</span>`],
+    ['Размер pcap', `${v.pcap_size_bytes || 0} байт`],
+    ['Plaintext в pcap',
+      v.plaintext_in_pcap
+        ? '<span class="badge badge-err">НАЙДЕН</span>'
+        : '<span class="badge badge-ok">не найден ✓</span>'],
+    ['Ключевые слова протокола в pcap',
+      v.protocol_keywords_in_pcap === 0
+        ? '<span class="badge badge-ok">0 ✓</span>'
+        : `<span class="badge badge-err">${v.protocol_keywords_in_pcap}</span>`],
+    ['Сообщение отправлено',
+      v.send_acked
+        ? '<span class="badge badge-ok">да ✓</span>'
+        : '<span class="badge badge-err">нет</span>'],
+    ['Сообщение получено на dest',
+      v.message_received_on_dest
+        ? '<span class="badge badge-ok">да ✓</span>'
+        : '<span class="badge badge-err">нет</span>'],
+  ];
+
+  let html = `
+    <p>Перехваченный трафик loopback содержит 24-байтовый заголовок (открытый)
+    и msgpack-encoded payload (поля протокола видны), при этом реальный
+    AEAD-ciphertext скрыт внутри поля <span class="mono">ciphertext</span>.
+    Расшифровать его без ключей невозможно.</p>
+    <table>
+      <thead><tr><th>Проверка</th><th>Результат</th></tr></thead>
+      <tbody>${summaryRows.map(([k, val]) => `<tr><td>${k}</td><td>${val}</td></tr>`).join('')}</tbody>
+    </table>
+  `;
+
+  if (frames.length) {
+    html += `<h3>Перехваченные кадры (${frames.length})</h3>`;
+    html += '<table><thead><tr><th>#</th><th>Тип</th><th>Заголовок</th><th>Payload</th></tr></thead><tbody>';
+    frames.forEach((f, i) => {
+      const h = f.header || {};
+      const headerInfo = `version=${h.version} type=0x${(h.type||0).toString(16).padStart(2,'0')} flags=0x${(h.flags||0).toString(16).padStart(4,'0')}<br/>req_id=${(h.request_id||'').slice(0,16)}…<br/>payload_len=${h.payload_length}`;
+      const preview = f.payload_preview_hex || '';
+      const aeadHex = f.ciphertext_aead_hex || '';
+
+      let payloadHtml = '';
+      if (preview) {
+        const previewFmt = preview.match(/.{1,2}/g)?.join(' ') || '';
+        payloadHtml += `<div class="hex-preview"><span class="hex-msgpack">msgpack: ${previewFmt}</span></div>`;
+      }
+      if (aeadHex) {
+        const aeadFmt = aeadHex.match(/.{1,2}/g)?.slice(0, 24).join(' ') || '';
+        payloadHtml += `<div class="hex-preview" style="margin-top:4px;"><span class="hex-cipher">AEAD ciphertext (${aeadHex.length/2} байт): ${aeadFmt}${aeadHex.length > 48 ? ' …' : ''}</span></div>`;
+      } else {
+        payloadHtml += `<div class="hex-preview" style="margin-top:4px;"><span class="hex-cipher">AEAD ciphertext: —</span></div>`;
+      }
+
+      html += `<tr>
+        <td>${i + 1}</td>
+        <td><span class="hex-tunnelbuild">${f.type_name || 'UNKNOWN'}</span></td>
+        <td class="mono">${headerInfo}</td>
+        <td>${payloadHtml}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+  } else {
+    html += `<p style="color:#9a6700;">Кадры не извлечены: либо tshark отсутствует,
+      либо в pcap нет кадров с нашим протоколом.</p>`;
+  }
+
+  el.innerHTML = html;
+})();
+
+// ===================================================================
+// Lookup summary
+// ===================================================================
+(function renderLookupSummary() {
+  const s = REPORT_DATA.lookups_summary;
+  if (!s) return;
+  document.getElementById('lookup-summary-section').style.display = 'block';
+  const el = document.getElementById('lookup-summary-content');
+
+  const rows = [
+    ['Всего lookup\'ов', s.count],
+    ['Успешных (target в final)', `${s.found}/${s.count}`],
+    ['Цель отсутствовала до старта', `${s.absent}/${s.count}`],
+    ['RPC: min / mean / median / p95 / max',
+      `${s.rpc_min} / ${s.rpc_mean.toFixed(2)} / ${s.rpc_median} / ${s.rpc_p95} / ${s.rpc_max}`],
+    ['Iterations: mean / max',
+      `${s.iter_mean.toFixed(2)} / ${s.iter_max}`],
+    ['Duration: mean / median / max',
+      `${s.dur_mean.toFixed(1)} / ${s.dur_median} / ${s.dur_max} ms`],
+  ];
+
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+      <tbody>${rows.map(([k, v]) => `<tr><td>${k}</td><td class="mono">${v}</td></tr>`).join('')}</tbody>
+    </table>
+  `;
+})();
+
+// ===================================================================
+// Lookup list (с раскрытием трасс)
+// ===================================================================
+(function renderLookups() {
+  const el = document.getElementById('lookups-list');
+  const data = REPORT_DATA.lookups || [];
+
+  if (!data.length) {
+    el.innerHTML = '<p style="color:#57606a;">Нет lookup-логов. Запустите lookup_batch.sh.</p>';
+    return;
+  }
+
+  function renderContacts(contacts) {
+    return contacts.map(c =>
+      `<span class="contact-chip">${shortId(c.node_id)}</span>`
+    ).join('');
+  }
+
+  let html = '';
+  for (const l of data) {
+    const statusBadge = l.found
+      ? '<span class="badge badge-ok">✓ found</span>'
+      : '<span class="badge badge-err">✗ not found</span>';
+
+    html += `
+      <details class="lookup-row">
+        <summary>
+          <span class="mono">${shortId(l.initiator)}</span> →
+          <span class="mono">${shortId(l.target)}</span>
+          &nbsp;·&nbsp; RPC=${l.rpc} iters=${l.iterations}
+          &nbsp;·&nbsp; ${l.duration_ms} ms
+          &nbsp;·&nbsp; ${statusBadge}
+        </summary>
+        <div class="lookup-detail">
+          <div><b>target_absent_at_start:</b> ${l.target_absent_at_start ? 'да' : 'нет'}</div>
+          <div><b>timeouts:</b> ${l.timeouts}</div>
+          <div style="margin-top:8px;"><b>Финальные контакты:</b><br>${renderContacts(l.final_contacts || [])}</div>
+          <div style="margin-top:8px;"><b>Итерации:</b></div>
+    `;
+
+    const log = l.iterations_log || [];
+    if (log.length === 0) {
+      html += `<div style="color:#57606a;">— нет данных итераций —</div>`;
+    } else {
+      for (const it of log) {
+        const queried = (it.queried || []).length;
+        const found = (it.found || []).length;
+        const timeouts = (it.timeouts || []).length;
+        html += `
+          <div class="iter-block">
+            <div class="iter-title">iter=${it.iter} · queried=${queried} · found=${found} · timeouts=${timeouts}</div>
+            <div style="font-size:11px;">
+              <b>queried:</b> ${renderContacts(it.queried || [])}
+            </div>
+            <div style="font-size:11px; margin-top:4px;">
+              <b>found:</b> ${renderContacts(it.found || [])}
+            </div>
+            ${timeouts > 0
+              ? `<div style="font-size:11px; margin-top:4px; color:#cf222e;"><b>timeouts:</b> ${renderContacts(it.timeouts)}</div>`
+              : ''}
+          </div>
+        `;
+      }
+    }
+
+    html += `</div></details>`;
+  }
+
+  el.innerHTML = html;
+})();
+
+// ===================================================================
+// Routing table
+// ===================================================================
 (function renderRouting() {
   const tbody = document.querySelector('#routing-table tbody');
   const filterInput = document.getElementById('routing-filter');
   const sortSelect = document.getElementById('routing-sort');
-
-  let data = (REPORT_DATA.routing || []).slice();
+  const data = (REPORT_DATA.routing || []).slice();
 
   function render() {
     const filter = filterInput.value.toLowerCase();
     const sortKey = sortSelect.value;
-
-    let filtered = data.filter(r => !filter || (r.node_id || '').toLowerCase().includes(filter));
+    let filtered = data.filter(r =>
+      !filter || (r.node_id || '').toLowerCase().includes(filter)
+    );
     filtered.sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
-      if (typeof av === 'number' && typeof bv === 'number') return av - bv;
+      if (typeof av === 'number' && typeof bv === 'number') return bv - av;
       return String(av).localeCompare(String(bv));
     });
-
     tbody.innerHTML = filtered.map(r => `
       <tr>
-        <td class="mono">${(r.node_id || '').slice(0, 16)}</td>
+        <td class="mono">${(r.node_id || '').slice(0, 16)}…</td>
         <td>${r.size || 0}</td>
         <td>${r.bucket_count || 0}</td>
         <td>${r.max_bucket_fill || 0}</td>
@@ -563,76 +1260,67 @@ const REPORT_DATA = __REPORT_DATA__;
   render();
 })();
 
-// ==== Lookup-таблица ====
-(function renderLookups() {
-  const tbody = document.querySelector('#lookups-table tbody');
-  const data = REPORT_DATA.lookups || [];
-
-  tbody.innerHTML = data.map(l => `
-    <tr>
-      <td class="mono">${(l.target || '').slice(0, 12)}</td>
-      <td class="mono">${(l.initiator || '').slice(0, 12)}</td>
-      <td>${l.target_absent_at_start ? '<span class="badge badge-ok">yes</span>' : '<span class="badge badge-warn">no</span>'}</td>
-      <td>${l.rpc || 0}</td>
-      <td>${l.iterations || 0}</td>
-      <td>${l.timeouts || 0}</td>
-      <td>${l.duration_ms || 0} ms</td>
-      <td>${l.found ? '<span class="badge badge-ok">✓</span>' : '<span class="badge badge-err">✗</span>'}</td>
-    </tr>
-  `).join('');
-})();
-
-// ==== Star vs Ring ====
+// ===================================================================
+// Star vs Ring
+// ===================================================================
 (function renderStarRing() {
   const data = REPORT_DATA.starRing;
   if (!data) return;
-
   document.getElementById('star-ring-section').style.display = 'block';
   const el = document.getElementById('star-ring-content');
-
   const metrics = [
-    ['nodes', 'Nodes'],
+    ['n', 'Nodes'],
     ['size_min', 'Table size min'],
     ['size_max', 'Table size max'],
     ['size_mean', 'Table size mean'],
     ['buckets_mean', 'Buckets per node mean'],
     ['max_fill_max', 'Max bucket fill'],
-    ['edges_total', 'Edges total'],
-    ['max_out_degree', 'Max out-degree'],
+    ['edges', 'Edges total'],
+    ['max_out_deg', 'Max out-degree'],
+    ['max_in_deg', 'Max in-degree'],
   ];
-
-  let html = '<table><thead><tr><th>Metric</th><th>Star</th><th>Ring</th><th>Diff</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>Metric</th><th>Star</th><th>Ring</th><th>Diff (ring-star)</th></tr></thead><tbody>';
   for (const [key, label] of metrics) {
-    const s = data.star[key] ?? '—';
-    const r = data.ring[key] ?? '—';
-    const diff = (typeof s === 'number' && typeof r === 'number') ? (r - s).toFixed(2) : '—';
+    const s = data.star && data.star[key] != null ? data.star[key] : '—';
+    const r = data.ring && data.ring[key] != null ? data.ring[key] : '—';
+    const diff = (typeof s === 'number' && typeof r === 'number')
+      ? (r - s).toFixed(2)
+      : '—';
     html += `<tr><td>${label}</td><td>${s}</td><td>${r}</td><td>${diff}</td></tr>`;
   }
   html += '</tbody></table>';
   el.innerHTML = html;
 })();
 
-// ==== Сериализация ====
+// ===================================================================
+// Serialization
+// ===================================================================
 (function renderSerialization() {
   const data = REPORT_DATA.serialization;
   if (!data || !data.length) return;
-
   document.getElementById('serialization-section').style.display = 'block';
   const el = document.getElementById('serialization-content');
-
   let html = '<table><thead><tr><th>Format</th><th>Size (bytes)</th><th>Encode (µs/msg)</th><th>Decode (µs/msg)</th></tr></thead><tbody>';
   for (const r of data) {
-    html += `<tr><td>${r.format}</td><td>${r.size_bytes}</td><td>${r.encode_us_per_msg.toFixed(3)}</td><td>${r.decode_us_per_msg.toFixed(3)}</td></tr>`;
+    html += `<tr>
+      <td>${r.format}</td>
+      <td>${r.size_bytes}</td>
+      <td>${r.encode_us_per_msg.toFixed(3)}</td>
+      <td>${r.decode_us_per_msg.toFixed(3)}</td>
+    </tr>`;
   }
   html += '</tbody></table>';
   el.innerHTML = html;
 })();
 
-// ==== Мета ====
+// ===================================================================
+// Meta
+// ===================================================================
 (function renderMeta() {
   const el = document.getElementById('report-meta');
-  const now = new Date().toLocaleString('ru-RU');
-  el.textContent = `Сгенерировано: ${now} · Узлов: ${(REPORT_DATA.routing || []).length} · Lookup'ов: ${(REPORT_DATA.lookups || []).length}`;
+  const now = new Date(REPORT_DATA.generated_at || Date.now()).toLocaleString('ru-RU');
+  const ov = REPORT_DATA.overview || {};
+  el.textContent = `Сгенерировано: ${now} · Узлов: ${ov.nodes || 0} · Рёбер: ${ov.edges || 0} · Lookup'ов: ${ov.lookups_total || 0} · Событий туннеля: ${ov.trace_events || 0}`;
 })();
 </script>
 

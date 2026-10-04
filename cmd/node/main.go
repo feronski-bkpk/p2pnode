@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -107,6 +108,15 @@ func main() {
 
 	if cfg.NoServe {
 		log.Info("no-serve: exiting")
+
+		if cfg.ExportDir != "" {
+			tracePath := filepath.Join(cfg.ExportDir, "trace.json")
+			if err := n.ExportTunnelTrace(tracePath); err != nil {
+				log.Warn("export tunnel trace", "err", err)
+			} else {
+				log.Info("tunnel trace exported", "path", tracePath)
+			}
+		}
 
 		exitAfter := cfg.ExitAfterMs
 		if exitAfter <= 0 {

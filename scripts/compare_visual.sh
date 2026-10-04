@@ -10,6 +10,25 @@ RESULTS_DIR="$ROOT_DIR/visualization/star-vs-ring"
 rm -rf "$RESULTS_DIR"
 mkdir -p "$RESULTS_DIR"
 
+LOOKUPS_BACKUP=""
+if [ -d "$METRICS_DIR/lookups" ]; then
+    LOOKUPS_BACKUP="$(mktemp -d)"
+    cp -r "$METRICS_DIR/lookups" "$LOOKUPS_BACKUP/" 2>/dev/null || true
+fi
+
+restore_lookups() {
+    if [ -n "$LOOKUPS_BACKUP" ] && [ -d "$LOOKUPS_BACKUP/lookups" ]; then
+        mkdir -p "$METRICS_DIR"
+        rm -rf "$METRICS_DIR/lookups"
+        cp -r "$LOOKUPS_BACKUP/lookups" "$METRICS_DIR/" 2>/dev/null || true
+    fi
+    if [ -n "$LOOKUPS_BACKUP" ]; then
+        rm -rf "$LOOKUPS_BACKUP" 2>/dev/null || true
+    fi
+}
+
+trap restore_lookups EXIT INT TERM
+
 # ============================================================
 # Star
 # ============================================================
@@ -26,7 +45,7 @@ N="$N" "$ROOT_DIR/scripts/collect_routing.sh" > /dev/null
 echo "[star] collected $(ls "$METRICS_DIR/collected"/routing-*.json 2>/dev/null | wc -l) snapshots"
 
 mkdir -p "$RESULTS_DIR/star"
-cp "$METRICS_DIR/collected"/*.json "$RESULTS_DIR/star/"
+cp "$METRICS_DIR/collected"/*.json "$RESULTS_DIR/star/" 2>/dev/null || true
 cp "$LOG_DIR"/node-*.log "$RESULTS_DIR/star/" 2>/dev/null || true
 
 "$ROOT_DIR/scripts/visualize.sh" \
@@ -52,7 +71,7 @@ N="$N" "$ROOT_DIR/scripts/collect_routing.sh" > /dev/null
 echo "[ring] collected $(ls "$METRICS_DIR/collected"/routing-*.json 2>/dev/null | wc -l) snapshots"
 
 mkdir -p "$RESULTS_DIR/ring"
-cp "$METRICS_DIR/collected"/*.json "$RESULTS_DIR/ring/"
+cp "$METRICS_DIR/collected"/*.json "$RESULTS_DIR/ring/" 2>/dev/null || true
 cp "$LOG_DIR"/node-*.log "$RESULTS_DIR/ring/" 2>/dev/null || true
 
 "$ROOT_DIR/scripts/visualize.sh" \
@@ -82,7 +101,6 @@ def summarize(dir_path):
         buckets.append(s["bucket_count"])
         max_fills.append(s["max_bucket_fill"])
 
-    # Считаем рёбра для out/in degree.
     edges = set()
     for f in files:
         s = json.load(open(f))
