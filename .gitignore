@@ -1,17 +1,134 @@
+# ---------- Go build artifacts ----------
 /bin/
 /node
+/p2pnode
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.cover
+coverage.txt
 
+# ---------- Go workspaces (не используем, но на всякий) ----------
+go.work
+go.work.sum
+
+# ---------- State / logs / metrics (локальный запуск) ----------
 /state/
 /logs/
 /metrics/
 /demo/
 
+# ---------- Docker volumes (этап 6) ----------
+# state-docker/ содержит identity.key — секрет!
+/state-docker/
+/logs-docker/
+/metrics-docker/
+/tmp-lookup-state/
+
+# Сгенерированный docker-compose.yml — его пересоздаёт
+# scripts/docker_gen_compose.sh при каждом docker_up.
+/docker-compose.yml
+/docker-compose.*.yml
+!/docker-compose.template.yml
+
+# ---------- File-transfer (этап 7) ----------
+/recv-files/
+/send-files/
+/sent-files/
+/testdata/*.bin
+/testdata/*.dat
+/testdata/*.iso
+/testdata/large/
+
+# ---------- Netem / underlay backup (этап 7) ----------
+/netem-backup/
+/nftables-backup/
+/netns-backup/
+
+# ---------- Visualization / reports ----------
+/visualization/
+/report.html
+/report-*.html
+/graphs/
+*.png
+*.svg
+*.pdf
+!docs/**/*.png
+!docs/**/*.svg
+
+# ---------- Secrets ----------
+# Приватные ключи идентичности — никогда в git!
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+identity.key
+**/state/**/identity.key
+**/state-docker/**/identity.key
+
+# ---------- Environment / local config ----------
+.env
+.env.local
+.env.*.local
+*.local.yaml
+!deploy/configs/*.yaml
+
+# ---------- IDE / editors ----------
 .idea/
 .vscode/
 *.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
 
-*.test
-*.out
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
 
-/visualization/
-/report.html
+# ---------- Logs / temp ----------
+*.log
+*.tmp
+*.bak
+tmp/
+temp/
+*.swp
+*~
+
+# Исключения: важные логи коммитим
+!docs/**/*.log
+
+# ---------- Python (для скриптов анализа) ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# ---------- Test artifacts ----------
+/tmp/dbg-*/
+/tmp/p2pnode-*/
+/tmp/test-*/
+
+# ---------- Coverage / profiles ----------
+*.coverprofile
+profile.cov
+
+# ---------- Benchmarks ----------
+*.bench

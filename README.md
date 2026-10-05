@@ -16,13 +16,14 @@
 | 3 | Подписанные `NodeRecord` (Ed25519), STORE/FIND_VALUE, репликация R=3, TTL, anti-rollback, псевдонимы |
 | 4 | Собственный AKE (Ed25519 + X25519 + HKDF + ChaCha20-Poly1305), anti-replay |
 | 5 | Туннели через ретрансляторы: E2E-шифрование, build-ACK, TTL, восстановление, пул |
-| 6 | Docker Compose, 4 bootstrap-схемы, 20+ узлов |
+| 6 | Docker Compose, 4 bootstrap-схемы (star/ring/tree/multiseed), N=15–21, сценарии отказа |
 | 7 | Метрики, статистика, графики |
 
 ## Требования
 
-- **Go** 1.22 или новее.
+- **Go** 1.26 или новее.
 - **Python 3** — для скриптов анализа и генерации отчёта.
+- **Docker** ≥ 20.10 + `docker compose` v2.
 - **Graphviz** (опционально) — для визуализации графов.
 - **bash**, `sha256sum`, `mktemp` — стандартные утилиты Linux.
 - **tcpdump** (опционально) — для демонстрации E2E-защиты.
@@ -41,15 +42,10 @@ go mod download
 
 ## Быстрый старт
 
-### Сборка
+### Сборка и тесты
 
 ```bash
 go build ./...
-```
-
-### Тесты
-
-```bash
 go test ./...
 ```
 
@@ -77,25 +73,25 @@ go run ./cmd/node \
     -log-level INFO
 ```
 
-Второй узел выполнит handshake с seed'ом, `PING`, `FIND_NODE(self.ID)`
-и self-lookup — присоединится к сети.
-
-### Полный эксперимент на N=15
+### Полный эксперимент на N=15 (локально)
 
 ```bash
 chmod +x scripts/*.sh
 ./scripts/run_experiment.sh 15 20
 ```
 
-Скрипт:
+## Быстрый старт в Docker
 
-1. Останавливает предыдущий стенд.
-2. Собирает бинарник.
-3. Запускает 15 узлов в star-схеме (порты 9001–9015).
-4. Ждёт 20 секунд сходимости.
-5. Собирает routing-снапшоты.
-6. Делает 30 контрольных lookup'ов.
-7. Проверяет невырожденность DHT.
+```bash
+# Один прогон: build + 15 узлов + 30 lookup'ов + отчёт
+./scripts/run_experiment_docker.sh 15 star 30
+
+# Открыть отчёт
+xdg-open report.html
+```
+
+**Подробнее:** см. **[docs/DEPLOY.md](docs/DEPLOY.md)** — 4
+bootstrap-схемы, скрипты управления, диагностика, ограничения.
 
 ## Демонстрационные сценарии
 
@@ -109,28 +105,15 @@ sleep 20
 ./scripts/stop_all.sh
 ```
 
-**Проверка невырожденности DHT:** не менее 80% узлов имеют
-`< N-1` контактов, ни один узел не имеет полного реестра.
-
 ### 2. STORE / FIND_VALUE
 
 ```bash
 ./scripts/demo_store.sh 5 15
 ```
 
-Сценарий:
-
-1. 5 узлов в star-схеме.
-2. Узел 1 публикует свою `NodeRecord` в DHT.
-3. Узел 3 находит её через `FIND_VALUE`.
-4. Останавливается один хранитель.
-5. Узел 4 находит ту же запись — репликация работает.
-6. Публикация псевдонима `alice`.
-7. Поиск по псевдониму.
-
 ### 3. Защищённый канал
 
-Все RPC в проекте идут через handshake + AEAD. Отдельная демонстрация:
+Все RPC идут через handshake + AEAD. Отдельная демонстрация:
 
 ```bash
 # Терминал 1: seed
@@ -141,56 +124,58 @@ sleep 20
     -bootstrap 127.0.0.1:9500 -log-level DEBUG
 ```
 
-В логах — `handshake_done` с `session_id`. Трафик шифрован ChaCha20-Poly1305.
-
 ### 4. Туннели через ретрансляторы
-
-**Базовая доставка** (3 ретранслятора, E2E):
 
 ```bash
 ./scripts/demo_tunnel.sh
-```
-
-Проверки:
-
-- `OK: 3 relays participated`
-- `tunnel: build complete ... acks_received=3`
-- `OK: plaintext not found in relay logs (E5-4)`
-- `OK: node-2 received tunnel message`
-
-**Восстановление после отказа ретранслятора**:
-
-```bash
 ./scripts/demo_tunnel_recovery.sh
-```
-
-**Доказательство E2E-защиты через pcap**:
-
-```bash
-# Один раз: даём tcpdump права без root
-sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)
-
 ./scripts/demo_tunnel_pcap.sh
-```
-
-**Пул из 3 туннелей с переключением**:
-
-```bash
 ./scripts/demo_tunnel_pool.sh
 ```
 
 **Детали:** см. **[docs/TUNNEL.md](docs/TUNNEL.md)**.
 
-### 5. HTML-отчёт с графами
+### 5. Docker: 4 bootstrap-схемы
 
 ```bash
-# Запустить эксперимент
-./scripts/run_experiment.sh 15 20
+# star
+./scripts/docker_up.sh 15 star
 
-# Сгенерировать отчёт
+# ring
+./scripts/docker_up.sh 15 ring
+
+# tree
+./scripts/docker_up.sh 15 tree
+
+# multiseed (3 seed'а)
+./scripts/docker_up.sh 15 multiseed
+
+# Полное сравнение всех 4
+./scripts/compare_4schemes_docker.sh 15 30
+```
+
+**Детали:** см. **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
+### 6. Docker: сценарии отказа
+
+```bash
+# E6-5: работа без seed'а
+./scripts/demo_seed_down.sh 15
+
+# E6-6: 3 сценария отказа
+./scripts/demo_failures.sh 7
+```
+
+### 7. Docker: N=21 (продвинутый масштаб)
+
+```bash
+./scripts/run_experiment_n21.sh 21 40
+```
+
+### 8. HTML-отчёт с графами
+
+```bash
 ./scripts/generate_report.sh
-
-# Открыть
 xdg-open report.html
 ```
 
@@ -202,17 +187,18 @@ xdg-open report.html
 - **Star vs Ring** — сравнение bootstrap-схем.
 - **Сериализация** — msgpack vs JSON vs gob.
 
-**Детали:** см. **[docs/VISUALIZATION.md](docs/VISUALIZATION.md)**.
-
 ## Структура репозитория
 
 ```
 p2pnode/
 ├── README.md                       ← этот файл
+├── Dockerfile                      ← multi-stage сборка
+├── docker-compose.yml              ← автогенерируемый
 ├── docs/
 │   ├── ARCHITECTURE.md             ← архитектура, решения
 │   ├── PROTOCOL.md                 ← протокол и алгоритмы
 │   ├── TUNNEL.md                   ← туннели через ретрансляторы
+│   ├── DEPLOY.md                   ← Docker-развёртывание
 │   └── VISUALIZATION.md            ← Graphviz, HTML-отчёт
 ├── cmd/
 │   └── node/main.go                ← точка входа
@@ -233,22 +219,11 @@ p2pnode/
 │   │   ├── transport.go            ← интерфейсы Conn/Listener/Transport
 │   │   └── tcp/                    ← TCP-реализация (SetReadTimeout)
 │   └── tunnel/                     ← туннели через ретрансляторы
-│       ├── tunnel.go               ← Tunnel, State, E2ESession
-│       ├── id.go                   ← ID, NewID
-│       ├── build.go                ← BuildCoordinator
-│       ├── handlers.go             ← HandleTunnelBuild, relayLoop, destDataLoop
-│       ├── relay.go                ← RelayState, RelayStore, DestSessionStore
-│       ├── session.go              ← Session, SendMessage, readLoop
-│       ├── manager.go              ← TunnelManager, BuildPool, pickSession
-│       ├── message.go              ← MessageStore
-│       ├── route.go                ← RouteBuilder
-│       ├── profile.go              ← ProfileStore
-│       └── *_test.go               ← unit + integration тесты
 ├── scripts/
 │   ├── common.sh                   ← общие переменные
-│   ├── run_star.sh                 ← star-стенд
-│   ├── run_ring.sh                 ← ring-стенд
-│   ├── run_experiment.sh           ← полный эксперимент
+│   ├── run_star.sh                 ← star-стенд (локально)
+│   ├── run_ring.sh                 ← ring-стенд (локально)
+│   ├── run_experiment.sh           ← полный эксперимент (локально)
 │   ├── demo_store.sh               ← STORE / FIND_VALUE
 │   ├── demo_tunnel.sh              ← туннельная доставка
 │   ├── demo_tunnel_recovery.sh     ← восстановление (E5-6)
@@ -261,9 +236,21 @@ p2pnode/
 │   ├── generate_report.sh          ← HTML-отчёт
 │   ├── visualize.sh                ← Graphviz-графы
 │   ├── collect_routing.sh          ← сбор снапшотов
-│   ├── lookup_batch.sh             ← 30 lookup'ов
+│   ├── lookup_batch.sh             ← 30 lookup'ов (локально)
 │   ├── capture_and_verify.sh       ← pcap + проверка шифрования
-│   └── stop_all.sh                 ← остановка
+│   ├── stop_all.sh                 ← остановка локального стенда
+│   │
+│   ├── docker_gen_compose.sh       ← генератор docker-compose.yml
+│   ├── docker_up.sh                ← запуск N узлов
+│   ├── docker_down.sh              ← остановка + очистка
+│   ├── docker_collect.sh           ← сбор routing из контейнеров
+│   ├── docker_lookup_batch.sh      ← 30 lookup'ов через Docker
+│   ├── docker_check_lookup.sh      ← один lookup с DEBUG
+│   ├── run_experiment_docker.sh    ← полный эксперимент в Docker
+│   ├── demo_seed_down.sh           ← работа без seed'а
+│   ├── demo_failures.sh            ← 3 сценария отказа
+│   ├── compare_4schemes_docker.sh  ← сравнение 4 схем
+│   └── run_experiment_n21.sh       ← N=21
 ├── deploy/
 │   └── configs/                    ← примеры YAML-конфигов
 └── go.mod / go.sum
@@ -280,6 +267,7 @@ p2pnode/
 |----------|-----|-----|---------|
 | Каталог состояния | `-state-dir` | `NODE_STATE_DIR` | `./state` |
 | Адрес прослушивания | `-listen-host` | `LISTEN_HOST` | `0.0.0.0` |
+| Анонсируемое имя | `-advertise-host` | `ADVERTISE_HOST` | — |
 | Порт | `-listen-port` | `LISTEN_PORT` | `9000` |
 | Bootstrap | `-bootstrap` | `BOOTSTRAP_PEERS` | — |
 | Размер k-bucket | `-k` | `K_BUCKET_SIZE` | `4` |
@@ -302,17 +290,6 @@ p2pnode/
 | Пауза перед publish | `-publish-wait-ms` | `PUBLISH_WAIT_MS` | `3000` |
 | Получатель | `-send-to` | `SEND_TO` | — |
 | Текст | `-send-text` | `SEND_TEXT` | — |
-| Число отправок | `-send-repeat` | `SEND_REPEAT` | `1` |
-| Интервал | `-send-interval-ms` | `SEND_INTERVAL_MS` | `2000` |
-| Force-exit | `-exit-after-ms` | `EXIT_AFTER_MS` | `5000` |
-
-### YAML-конфиг
-
-```bash
-go run ./cmd/node -config deploy/configs/node-seed.yaml
-```
-
-Пример: `deploy/configs/node-seed.yaml`.
 
 ## Документация
 
@@ -321,8 +298,8 @@ go run ./cmd/node -config deploy/configs/node-seed.yaml
   модель угроз, границы.
 - **[PROTOCOL.md](docs/PROTOCOL.md)** — формат кадра, типы сообщений,
   payload'ы, алгоритмы lookup / STORE / handshake / туннелей.
-- **[TUNNEL.md](docs/TUNNEL.md)** — туннели через ретрансляторы:
-  построение, E2E-шифрование, состояния, восстановление, пул, TTL,
-  демо-сценарии.
+- **[TUNNEL.md](docs/TUNNEL.md)** — туннели через ретрансляторы.
+- **[DEPLOY.md](docs/DEPLOY.md)** — Docker-развёртывание: 4
+  bootstrap-схемы, скрипты управления, диагностика.
 - **[VISUALIZATION.md](docs/VISUALIZATION.md)** — Graphviz-графы,
-  HTML-отчёт с D3.js, сравнение bootstrap-схем, event stream.
+  HTML-отчёт с D3.js.

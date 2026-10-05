@@ -15,8 +15,9 @@ import (
 type Config struct {
 	NodeStateDir string `yaml:"node_state_dir"`
 
-	ListenHost string `yaml:"listen_host"`
-	ListenPort int    `yaml:"listen_port"`
+	ListenHost    string `yaml:"listen_host"`
+	AdvertiseHost string `yaml:"advertise_host"`
+	ListenPort    int    `yaml:"listen_port"`
 
 	BootstrapPeers []string `yaml:"bootstrap_peers"`
 	SkipSelfLookup bool     `yaml:"skip_self_lookup"`
@@ -72,6 +73,7 @@ func Default() Config {
 	return Config{
 		NodeStateDir:       "./state",
 		ListenHost:         "0.0.0.0",
+		AdvertiseHost:      "",
 		ListenPort:         9000,
 		BootstrapPeers:     nil,
 		SkipSelfLookup:     false,
@@ -114,6 +116,7 @@ func Default() Config {
 type yamlConfig struct {
 	NodeStateDir     string   `yaml:"node_state_dir"`
 	ListenHost       string   `yaml:"listen_host"`
+	AdvertiseHost    string   `yaml:"advertise_host"`
 	ListenPort       int      `yaml:"listen_port"`
 	BootstrapPeers   []string `yaml:"bootstrap_peers"`
 	SkipSelfLookup   bool     `yaml:"skip_self_lookup"`
@@ -165,6 +168,9 @@ func (c *Config) LoadFromFile(path string) error {
 	}
 	if y.ListenHost != "" {
 		c.ListenHost = y.ListenHost
+	}
+	if y.AdvertiseHost != "" {
+		c.AdvertiseHost = y.AdvertiseHost
 	}
 	if y.ListenPort != 0 {
 		c.ListenPort = y.ListenPort
@@ -281,6 +287,7 @@ func Load(args []string) (Config, error) {
 		configFlag     = fs.String("config", *configPath, "путь к YAML-конфигу")
 		stateDir       = fs.String("state-dir", envStr("NODE_STATE_DIR", cfg.NodeStateDir), "каталог состояния")
 		listenHost     = fs.String("listen-host", envStr("LISTEN_HOST", cfg.ListenHost), "IP для прослушивания")
+		advertiseHost  = fs.String("advertise-host", envStr("ADVERTISE_HOST", cfg.AdvertiseHost), "адрес, публикуемый в DHT (для Docker/NAT)")
 		listenPort     = fs.Int("listen-port", envInt("LISTEN_PORT", cfg.ListenPort), "TCP-порт")
 		bootstrap      = fs.String("bootstrap", envStr("BOOTSTRAP_PEERS", strings.Join(cfg.BootstrapPeers, ",")), "bootstrap-адреса через запятую")
 		skipSelfLookup = fs.Bool("skip-self-lookup", envBool("SKIP_SELF_LOOKUP", cfg.SkipSelfLookup), "пропустить self-lookup при bootstrap")
@@ -321,6 +328,7 @@ func Load(args []string) (Config, error) {
 
 	cfg.NodeStateDir = *stateDir
 	cfg.ListenHost = *listenHost
+	cfg.AdvertiseHost = *advertiseHost
 	cfg.ListenPort = *listenPort
 	cfg.SkipSelfLookup = *skipSelfLookup
 	cfg.KBucketSize = *kBucket
@@ -421,6 +429,16 @@ func (c Config) Validate() error {
 
 func (c Config) ListenAddr() string {
 	return fmt.Sprintf("%s:%d", c.ListenHost, c.ListenPort)
+}
+
+func (c Config) AdvertiseHostOr(host string) string {
+	if c.AdvertiseHost != "" {
+		return c.AdvertiseHost
+	}
+	if host == "0.0.0.0" || host == "::" || host == "" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 func envStr(key, def string) string {

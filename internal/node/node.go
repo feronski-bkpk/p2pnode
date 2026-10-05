@@ -100,9 +100,8 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		ev.Close()
 		return nil, fmt.Errorf("node: parse listen addr: %w", err)
 	}
-	if host == "0.0.0.0" || host == "::" || host == "" {
-		host = "127.0.0.1"
-	}
+
+	host = cfg.AdvertiseHostOr(host)
 
 	now := uint64(time.Now().UnixMilli())
 	local := routing.Contact{
@@ -128,7 +127,8 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 	srv := rpc.NewServer(local, id, table, st, checker, log, ev)
 
 	ev.Log("server_started", map[string]any{
-		"addr": ln.Addr(),
+		"addr":           ln.Addr(),
+		"advertise_host": host,
 	})
 
 	n := &Node{
@@ -256,7 +256,10 @@ func (n *Node) Bootstrap() error {
 				"received", len(nodes),
 				"added", added,
 				"table_size", n.Table.Size())
-			return nil
+			if n.Table.Size() > 0 {
+				return nil
+			}
+			continue
 		}
 
 		n.Table.Add(seed, n.Checker)
