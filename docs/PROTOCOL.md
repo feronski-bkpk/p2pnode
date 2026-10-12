@@ -1,6 +1,9 @@
 # Протокол p2pnode
 
-Документ описывает формат кадра, типы сообщений, payload'ы и алгоритмы протокола узла p2pnode, включая туннели через ретрансляторы.
+Документ описывает формат кадра, типы сообщений, payload'ы и алгоритмы
+протокола узла p2pnode, включая туннели через ретрансляторы,
+file-transfer поверх туннелей и multi-path lookup для защиты от
+Eclipse/Sybil.
 
 ## 1. Формат кадра
 
@@ -28,8 +31,7 @@
 
 **Максимальный размер payload:** `MAX_FRAME_PAYLOAD = 65536`.
 
-**Ответ:** содержит **тот же `request_id`**, что и запрос. Иначе
-клиент отклоняет ответ (`ErrRequestIDMismatch`).
+**Ответ:** содержит **тот же `request_id`**, что и запрос.
 
 ### Защищённый кадр
 
@@ -55,6 +57,38 @@
 остаётся, payload — открытый msgpack. Внутри `payload` содержится
 `ciphertext` (E2E-зашифрованный), который **ретранслятор не читает**.
 
+### Туннельный кадр с InnerEnvelope
+
+С версии E7-4 payload внутри `TUNNEL_DATA.Ciphertext` содержит
+**InnerEnvelope** — обёртку для мультиплексирования прикладных
+сообщений:
+
+```
+TunnelDataPayload {
+    tunnel_id
+    message_id
+    ciphertext = AEAD.Seal(InnerEnvelope)
+}
+
+InnerEnvelope = msgpack {
+    inner_type: uint8
+    inner_data: []byte
+}
+```
+
+**InnerType:**
+
+| Код | Имя | Назначение |
+|-----|-----|------------|
+| `0x01` | `APP_TEXT` | Обычный текст (`SendMessage`) |
+| `0x10` | `FILE_HEADER` | Метаданные файла (E7-4) |
+| `0x11` | `FILE_CHUNK` | Чанк файла (E7-4) |
+| `0x12` | `FILE_ACK` | Подтверждение чанка (E7-4) |
+| `0x13` | `FILE_DONE` | Финал передачи (E7-4) |
+
+**Совместимость:** старые узлы, не знающие `InnerEnvelope`, получают
+raw text как `APP_TEXT` (через fallback в `handleIncomingData`).
+
 ## 2. Типы сообщений
 
 | Код | Имя | Направление | Этап |
@@ -79,12 +113,16 @@
 | `0x12` | `TUNNEL_BUILD_ACK` | ответ | 5 |
 | `0x7F` | `ERROR` | ответ/уведомление | 1 |
 
+**Замечание:** отдельные `MsgType` для `FILE_*` **не используются** —
+они идут как `InnerType` внутри `TUNNEL_DATA`.
+
 ## 3. Сериализация
 
 Выбран **MessagePack** (`github.com/vmihailenco/msgpack/v5`).
 
 **Обоснование:** компактнее JSON в 1.7×, не требует кодогенерации
-(protobuf), языко-независим (gob). Измерения — `scripts/compare_serialization.sh`.
+(protobuf), языко-независим (gob). Измерения —
+`scripts/compare_serialization.sh`.
 
 ### 3.1. Contact
 
@@ -99,9 +137,9 @@ type Contact struct {
 ```
 
 Локальные метаданные (`LastSeenMs`, `LastVerifiedMs`) **не передаются**
-по сети — устанавливаются узлом-наблюдателем.
+по сети.
 
-### 3.2. Payload'ы
+### 3.2. Payload'ы RPC
 
 **PING / PONG:**
 
@@ -139,7 +177,7 @@ type FindNodeResponsePayload struct {
 type StoreRequestPayload struct {
     Sender Contact  `msgpack:"sender"`
     Key    [32]byte `msgpack:"key"`
-    Value  []byte   `msgpack:"value"` // msgpack от record.NodeRecord
+    Value  []byte   `msgpack:"value"`
     TTLSec int64    `msgpack:"ttl_sec"`
 }
 
@@ -178,7 +216,18 @@ type HandshakeConfirmPayload struct {
 }
 ```
 
-**TUNNEL:**
+**ERROR:**
+
+```go
+type ErrorPayload struct {
+    Code    string `msgpack:"code"`
+    Message string `msgpack:"message"`
+}
+```
+
+### 3.3. Payload'ы туннелей
+
+**TUNNEL_BUILD / ACK / OK / FAIL:**
 
 ```go
 type TunnelBuildPayload struct {
@@ -216,7 +265,11 @@ type TunnelBuildFailPayload struct {
     Reason    string   `msgpack:"reason"`
     FailedHop [32]byte `msgpack:"failed_hop"`
 }
+```
 
+**TUNNEL_DATA / ACK / CLOSE:**
+
+```go
 type TunnelDataPayload struct {
     TunnelID   [16]byte `msgpack:"tunnel_id"`
     MessageID  [16]byte `msgpack:"message_id"`
@@ -234,12 +287,40 @@ type TunnelClosePayload struct {
 }
 ```
 
-**ERROR:**
+### 3.4. Payload'ы file-transfer
+
+Идут **внутри** `TUNNEL_DATA.Ciphertext` как `InnerEnvelope` с типом
+`FILE_HEADER` / `FILE_CHUNK` / `FILE_ACK` / `FILE_DONE`.
 
 ```go
-type ErrorPayload struct {
-    Code    string `msgpack:"code"`
-    Message string `msgpack:"message"`
+type FileHeaderPayload struct {
+    FileID      [16]byte `msgpack:"file_id"`
+    Name        string   `msgpack:"name"`
+    TotalSize   uint64   `msgpack:"total_size"`
+    TotalChunks uint32   `msgpack:"total_chunks"`
+    SHA256      []byte   `msgpack:"sha256"`     
+    ChunkSize   uint32   `msgpack:"chunk_size"` 
+}
+
+type FileChunkPayload struct {
+    FileID      [16]byte `msgpack:"file_id"`
+    ChunkIndex  uint32   `msgpack:"chunk_index"`
+    ChunkSHA256 []byte   `msgpack:"chunk_sha256"`
+    Data        []byte   `msgpack:"data"`
+}
+
+type FileAckPayload struct {
+    FileID     [16]byte `msgpack:"file_id"`
+    ChunkIndex uint32   `msgpack:"chunk_index"`
+    OK         bool     `msgpack:"ok"`
+    Error      string   `msgpack:"error,omitempty"`
+}
+
+type FileDonePayload struct {
+    FileID  [16]byte `msgpack:"file_id"`
+    SHA256  []byte   `msgpack:"sha256"`
+    Success bool     `msgpack:"success"`
+    Error   string   `msgpack:"error,omitempty"`
 }
 ```
 
@@ -259,8 +340,6 @@ canonical_encode(pubkey) = pubkey_bytes (32 байта Ed25519)
 2. `identity_algorithm == "ed25519"`.
 3. `SHA-256(identity_public_key) == node_id`.
 4. `host != ""`, `port != 0`.
-
-Невалидный контакт отклоняется.
 
 ### 4.3. NodeRecord
 
@@ -282,7 +361,7 @@ type NodeRecord struct {
 
 **Signature:** `Ed25519.Sign(identity_priv, canonical_bytes)`.
 
-**Валидация:**
+**Валидация (7 проверок):**
 1. `SHA-256(identity_pubkey) == node_id`.
 2. Размер `identity_pubkey = 32`.
 3. `len(addresses) ∈ [1, 8]`, каждый адрес — `host:port`.
@@ -296,8 +375,6 @@ type NodeRecord struct {
 ### 5.1. Итеративный lookup
 
 **Входные данные:** `target_id`, `K=4`, `ALPHA=3`.
-
-**Алгоритм:**
 
 ```
 shortlist = table.Closest(target, K)
@@ -334,22 +411,54 @@ return shortlist[0:K]
 
 **Условие остановки:** target найден ИЛИ все K ближайших опрошены.
 
-### 5.2. Bootstrap
+### 5.2. Multi-path lookup
+
+**Цель:** защита от Eclipse/Sybil-атаки через **несколько
+независимых** lookup-путей + мажоритарное голосование.
+
+**Входные данные:** `target_id`, `seeds[]` (не менее `paths`), `paths`.
+
+```
+results = []
+for i in 0..paths:
+    seed = seeds[i]
+    tbl = pingFn(seed)             // routing-table с seed'ом
+    r = LookupNode(tbl, target)
+    winner = ExtractTargetAddr(r)  // addr target'а или ""
+    results.append(winner)
+
+votes = map[addr]int{}
+for w in results:
+    if w != "": votes[w]++
+
+// Мажоритет: > paths/2
+best = argmax(votes)
+if votes[best] > paths/2:
+    return {Winner: best, Agreement: votes[best], Disagree: false}
+else:
+    return {Disagree: true}        // все разные — отказ
+```
+
+**Гарантия:** если `> paths/2` seed'ов **честные**, winner —
+**правильный адрес**. Атакующий должен скомпрометировать
+**большинство** seeds.
+
+**CLI:** `-lookup-paths N` (default 1 — обычный lookup).
+
+### 5.3. Bootstrap
 
 **Входные данные:** `seed_addr`.
 
 ```
-seed = Ping(seed_addr)   // handshake + PING
+seed = Ping(seed_addr)             // handshake + PING
 table.Add(seed)
-result = LookupNode(self.ID)   // обычный режим
+result = LookupNode(self.ID)       // обычный режим
 // или для -skip-self-lookup:
 nodes = FindNodeRPC(seed, self.ID)
 for c in nodes: table.Add(c)
 ```
 
-### 5.3. STORE
-
-**Входные данные:** `rec *NodeRecord`, `ttl`.
+### 5.4. STORE
 
 ```
 key = NodeKeyForID(rec.NodeID)
@@ -363,86 +472,48 @@ parallel:
         ok = StoreRPC(c, key, value, ttl)
         if ok: replicas++
 
-store.Put(key, rec, now, ttl)   // локально
-
-if replicas >= R/2+1 OR local_stored:
-    return success
-else:
-    return ErrNotEnoughReplicas
+store.Put(key, rec, now, ttl)
+if replicas >= R/2+1 OR local_stored: return success
 ```
 
 **Если alias задан:** повторить для `AliasKeyForName(alias)`.
 
-### 5.4. FIND_VALUE
+### 5.5. FIND_VALUE
 
 ```
 if store.Get(key) found: return value
 
 shortlist = table.Closest(key, K)
 queried = {}
-
 for iter in 0..IDBits:
-    toQuery = первые ALPHA непрошенных из shortlist
+    toQuery = первые ALPHA непрошенных
     if empty: break
-
     parallel:
         for c in toQuery:
             resp = FindValueRPC(c, key)
             if resp.found: return resp.value
             for n in resp.nodes:
-                shortlist.append(n)
-                table.Add(n)
-
+                shortlist.append(n); table.Add(n)
     shortlist = unique_sorted(shortlist, key, K)
 
 return ErrValueNotFound
 ```
 
-**Early termination:** как только нашли — возвращаем.
-
-### 5.5. Handshake (AKE)
+### 5.6. Handshake (AKE)
 
 **Инициатор:**
 
 ```
 1. Dial(addr) → conn
 2. hs = NewHandshakeState(id_pub, id_priv, isInitiator=true)
-3. hello = hs.BuildHello(self.NodeID)
-4. conn.WriteFrame(HANDSHAKE_HELLO, hello)
-5. replyFrame = conn.ReadFrame()  // HANDSHAKE_REPLY
-6. replyMsg = decode(replyFrame.Payload)
-7. if expectedPeerID != nil && replyMsg.ResponderID != expectedPeerID: fail
-8. (resp_id, resp_id_pub, resp_eph, resp_rnd) = hs.ProcessReply(replyMsg)
-9. confirm = hs.BuildConfirm(...)
-10. conn.WriteFrame(HANDSHAKE_CONFIRM, confirm)
-11. transcript = TranscriptBytes(...)
-12. keys = DeriveKeys(
-        hs.ephemeral_priv, resp_eph,
-        id_priv, resp_id_pub,
-        transcript, hs.session_id,
-        isInitiator=true,
-    )
-13. secureConn = NewSecureConn(conn, keys.k_i→r, keys.k_r→i, keys.session_id)
+3. conn.WriteFrame(HANDSHAKE_HELLO, hs.BuildHello())
+4. replyFrame = conn.ReadFrame()
+5. if replyMsg.ResponderID != expected: fail
+6. hs.ProcessReply(replyMsg)
+7. conn.WriteFrame(HANDSHAKE_CONFIRM, hs.BuildConfirm())
+8. keys = DeriveKeys(...)
+9. secureConn = NewSecureConn(conn, keys...)
 ```
-
-**Responder:** симметрично.
-
-**Транскрипт:**
-
-```
-transcript = msgpack {
-    protocol: "p2pnode-ake-v1",
-    initiator_id, responder_id: [32]byte,
-    initiator_id_pub, responder_id_pub: []byte,
-    initiator_eph, responder_eph: []byte,
-    initiator_rand, responder_rand: []byte,
-    session_id: [16]byte,
-}
-```
-
-**Подписи:**
-- Responder подписывает transcript своим Ed25519-ключом.
-- Initiator подписывает тот же transcript своим ключом.
 
 **4 DH:**
 
@@ -462,19 +533,13 @@ k_i→r = HKDF-Expand(HKDF-Extract(salt, ikm), "initiator→responder", 32)
 k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 ```
 
-### 5.6. AEAD
+### 5.7. AEAD
 
-**Алгоритм:** ChaCha20-Poly1305.
-
-**Nonce:** 12 байт = `session_id[0:4] || counter(8, big-endian)`.
-
-**AAD:** 20 байт = `version || type || flags || request_id`.
-
-**Anti-replay:** монотонный counter. `counter < recvCounter` →
-`ErrReplayDetected`. Пропуск → ошибка.
-
-**Уничтожение ключей:** после `SecureConn.Close()` байты ключей
-обнуляются (`zeroBytes`).
+- **Алгоритм:** ChaCha20-Poly1305.
+- **Nonce:** 12 байт = `session_id[0:4] || counter(8, big-endian)`.
+- **AAD:** 20 байт = `version || type || flags || request_id`.
+- **Anti-replay:** монотонный counter. `counter < recvCounter` →
+  `ErrReplayDetected`. Пропуск → ошибка.
 
 ## 6. Алгоритмы туннелей
 
@@ -483,47 +548,29 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 **Инициатор** выбирает `FullPath = [init, relay1, ..., relayN, dest]`.
 
 ```
-1. Для каждого ретранслятора из FullPath — выбрать адрес.
-2. Сгенерировать:
-   - tunnel_id (16 байт, crypto/rand)
-   - e2e_eph_priv, e2e_eph_pub (X25519)
-   - e2e_random (32 байта)
-3. Отправить TUNNEL_BUILD с HopIndex=1 первому ретранслятору.
-4. Ждать поток ACK'ов и BUILD_OK.
+1. Сгенерировать tunnel_id, e2e_eph_priv/pub, e2e_random.
+2. Отправить TUNNEL_BUILD с HopIndex=1.
+3. Ждать ACK'и от каждого ретранслятора + BUILD_OK от dest.
 ```
 
-**Ретранслятор** на `HopIndex = i` (не последний):
+**Ретранслятор** на `HopIndex = i`:
 
 ```
 1. nextAddr = FullPath[i+1]
 2. Dial(nextAddr) → nextConn
-3. Отправить TUNNEL_BUILD_ACK {tunnel_id, hop_index=i, hop_id=LocalID}
-   в PrevConn (обратно инициатору).
+3. Отправить TUNNEL_BUILD_ACK в PrevConn.
 4. Переслать TUNNEL_BUILD с HopIndex=i+1, PathSoFar += LocalID.
 5. Запустить relayLoop (prev ↔ next).
-6. Сохранить RelayState {tunnel_id, prev, next, expiresAt}.
 ```
 
-**Dest** на `HopIndex = len(FullPath)-1`:
+**Dest:**
 
 ```
-1. Сгенерировать e2e_eph_priv, e2e_eph_pub, e2e_random.
-2. Считать transcript.
-3. Подписать Ed25519.
-4. Ответить TUNNEL_BUILD_OK с {dest_e2e_pubkey, dest_random, signature}.
-5. Сохранить DestSession {tunnel_id, e2e, expiresAt}.
-6. Запустить destDataLoop.
-```
-
-**Инициатор** при получении всех ACK'ов + BUILD_OK:
-
-```
-1. Проверить подпись dest'а над transcript.
-2. dh = X25519(eph_i_priv, dest_eph_pub)
-3. salt = SHA-256(transcript)
-4. k_i→d = HKDF-Expand(HKDF-Extract(salt, dh), "initiator→dest", 32)
-5. k_d→i = HKDF-Expand(HKDF-Extract(salt, dh), "dest→initiator", 32)
-6. Tunnel ACTIVE, E2ESession создана.
+1. Сгенерировать e2e_eph_priv/pub, e2e_random.
+2. Подписать transcript Ed25519.
+3. Ответить TUNNEL_BUILD_OK.
+4. Сохранить DestSession.
+5. Запустить destDataLoop.
 ```
 
 ### 6.2. Передача данных
@@ -535,7 +582,7 @@ Alice:
   payload = nonce(8) || ct
   TUNNEL_DATA {tunnel_id, message_id, ciphertext=payload}
 
-Ретрансляторы: пересылают как есть.
+Ретрансляторы: пересылают как есть (не расшифровывают).
 
 Bob:
   CheckRecvNonce(counter)
@@ -543,31 +590,7 @@ Bob:
   TUNNEL_ACK {tunnel_id, message_id}
 ```
 
-### 6.3. Восстановление
-
-`TunnelManager.SendMessage`:
-
-```
-msgID = NewMessageID()  // один на все попытки
-for attempt := 0; attempt < 3; attempt++:
-    sess = pickSession(destID, attempt)
-    err = sess.SendMessageWithID(msgID, text, AckTimeout)
-    if err == nil:
-        if attempt > 0: rebuildsOK++
-        return msgID, nil
-    lastErr = err
-    sess.Close()
-    removeSession(sess)
-return msgID, lastErr (rebuildsFail++)
-```
-
-**`pickSession`:**
-
-- E5-8: если `pools[destID]` не пуст → `alive[attempt]`.
-- E5-6: если `lastSession[destID]` ACTIVE → использовать.
-- Иначе: `Build(destID)`.
-
-### 6.4. TTL и expire
+### 6.3. TTL и expire
 
 `TunnelBuildPayload.TTLSec` передаётся всем хопам. Каждый хоп:
 
@@ -575,37 +598,101 @@ return msgID, lastErr (rebuildsFail++)
 ExpiresAt = now + TTLSec
 ```
 
-Фоновые expire loop (раз в 30 сек):
+Фоновые expire loop (раз в 30 сек): удаляют истёкшие сессии и
+`RelayState` / `DestSession`.
+
+## 7. Алгоритмы file-transfer
+
+### 7.1. SendFile
 
 ```
-TunnelManager.expireSessions()   // удаляет истёкшие из sessions/pools/lastSession
-RelayStore.ExpireAll()           // удаляет истёкшие RelayState
-DestSessionStore.ExpireAll()     // удаляет истёкшие DestSession
+1. SplitFile(path, chunkSize):
+   - file_id ← random(16)
+   - total_chunks ← ceil(size / chunkSize)
+   - SHA256 ← hash(file)
+   - канал chunks (idx, sha256, data)
+
+2. Отправить InnerEnvelope{FILE_HEADER, header}
+   через TunnelManager.SendBytesWithID.
+
+3. Для каждого chunk:
+   a. InnerEnvelope{FILE_CHUNK, chunk}
+   b. SendBytesWithID (ждёт ACK на уровне туннеля)
+   c. Retry до 3 раз при ошибке.
+
+4. Логировать прогресс каждые 10%.
 ```
 
-## 7. Ключи DHT
+### 7.2. ReceiveFile
 
-### 7.1. По NodeID
+```
+1. OnFileHeader(header) → fileStore.Init(header)
+2. OnFileChunk(chunk):
+   - AddChunk(chunk) → true/false (дедупликация)
+   - если все chunks собраны → Complete(file_id)
+3. Reassemble(header, chunks, outPath):
+   - проверить SHA256 каждого chunk
+   - собрать в порядке chunk_idx
+   - проверить SHA256 всего файла
+   - записать на диск
+```
+
+### 7.3. Дедупликация
+
+`Store.AddChunk(c)`:
+- если `(file_id, chunk_idx)` уже существует → `false`;
+- иначе → `true` и добавляет.
+
+**Best practice:** защита от повторов по сети (не от атакующего).
+
+## 8. Subnet diversity в routing
+
+**Цель:** защита от Sybil-flooding — атакующий создаёт много
+узлов в одной /24 и заполняет k-bucket.
+
+**Правило:** в одном k-bucket — **не более `SubnetDiversityLimit=2`**
+контактов из одной /24.
+
+**Логика `RoutingTable.Add`:**
+
+```
+if c.NodeID не существующий:
+    newSubnet = subnetOfContact(c)
+    sameSubnet = count(existing с newSubnet)
+    if sameSubnet >= 2:
+        reject (subnet_diversity)
+```
+
+**`subnetOfContact(c)`:**
+
+- **IP** → /24 (IPv4) или /64 (IPv6);
+- **loopback** (`127.0.0.1`, `localhost`, `::1`) → "" (уникально);
+- **`node-XX`** (Docker) → `zone-(XX-1)/3+1 /24` (эмуляция);
+- **`sybil-XX`** → `zone-sybil/24` (все в одной зоне);
+- иначе → "".
+
+**Исключение:** обновление существующего контакта — не блокируется.
+
+## 9. Ключи DHT
+
+### 9.1. По NodeID
 
 ```
 key = SHA-256("node:" || node_id)
 ```
 
-### 7.2. По псевдониму
+### 9.2. По псевдониму
 
 ```
 key = SHA-256("alias:" || normalize(alias))
 ```
 
-**Нормализация:**
-- lowercase;
-- trim;
-- схлопывание внутренних пробелов;
-- удаление непечатаемых символов.
+**Нормализация:** lowercase, trim, схлопывание пробелов, удаление
+непечатаемых.
 
-## 8. TTL записей и re-publish
+## 10. TTL записей и re-publish
 
-**TTL по умолчанию:** 180 секунд (диапазон по ТЗ 120–300).
+**TTL:** 180 секунд (диапазон по ТЗ 120–300).
 
 **Re-publish:** раз в `TTL/2 = 90` секунд.
 
@@ -614,19 +701,26 @@ key = SHA-256("alias:" || normalize(alias))
 **Anti-rollback:** если у узла есть запись с `sequence_number=N`,
 приходит с `M < N` — отклоняется.
 
-## 9. Bootstrap-схемы
+## 11. Bootstrap-схемы
 
-### 9.1. Star
+### 11.1. Star
 
 Все узлы стартуют с `BOOTSTRAP_PEERS=["node-01:9001"]`.
-Seed — единая точка входа.
 
-### 9.2. Ring
+### 11.2. Ring
 
 Узел `i` стартует с `BOOTSTRAP_PEERS=["node-(i-1):port"]`.
-Каждый знает только предыдущего.
 
-## 10. Обработка ошибок
+### 11.3. Tree
+
+Узел `i` стартует с `BOOTSTRAP_PEERS=["node-(i/2):port"]`.
+
+### 11.4. Multiseed
+
+Первые 3 узла — seeds. Узлы 4+ стартуют с
+`BOOTSTRAP_PEERS=["node-01:9001","node-02:9002","node-03:9003"]`.
+
+## 12. Обработка ошибок
 
 | Код | Ситуация | Действие |
 |-----|----------|----------|
@@ -635,19 +729,19 @@ Seed — единая точка входа.
 | `ErrPayloadTooBig` | length > 64 KiB | Закрыть до выделения буфера |
 | `ErrShortHeader` | обрыв в заголовке | Закрыть |
 | `ErrShortPayload` | обрыв в payload | Закрыть |
-| `ErrRequestIDMismatch` | ответ с чужим request_id | Игнорировать, ждать таймаута |
+| `ErrRequestIDMismatch` | ответ с чужим request_id | Игнорировать |
 | `ErrReplayDetected` | повтор nonce | Отклонить кадр |
 | `ErrSessionMismatch` | чужой session_id | Отклонить кадр |
-| `ErrHandshakeBadSignature` | невалидная подпись handshake | Прервать handshake |
-| `ErrTooOld` (store) | `sequence_number` меньше существующего | Отклонить запись |
+| `ErrHandshakeBadSignature` | невалидная подпись | Прервать handshake |
+| `ErrTooOld` (store) | `sequence_number` меньше | Отклонить запись |
 | `ErrValueNotFound` | `FIND_VALUE` не нашёл | Вернуть ошибку |
 | `ErrTunnelClosed` | туннель закрыт | Прекратить отправку |
-| `ErrTunnelNotActive` | туннель не в ACTIVE/DEGRADED | Отказать |
-| `ErrBuildFailed` | не удалось построить туннель | Диагностика |
-| `ErrNoCandidates` | нет подходящих ретрансляторов | Диагностика |
+| `ErrTunnelNotActive` | туннель не ACTIVE | Отказать |
+| `ErrBuildFailed` | не удалось построить | Диагностика |
+| `ErrNoCandidates` | нет кандидатов | Диагностика |
 | `ErrTunnelExpired` | TTL истёк | Закрыть |
 
-## 11. Коды ошибок (ERROR payload)
+## 13. Коды ошибок (ERROR payload)
 
 | Code | Значение |
 |------|----------|
@@ -658,54 +752,63 @@ Seed — единая точка входа.
 | `TUNNEL_UNSUPPORTED` | TunnelHandler не установлен |
 | `INTERNAL` | Внутренняя ошибка |
 
-## 12. Пример: полный RPC
+## 14. Sybil-режим
 
-**Клиент → Сервер (PING):**
+**CLI:** `-sybil-mode -sybil-victim <hex64>`.
+
+**Поведение:**
+
+1. **Обычно** — узел ведёт себя как честный.
+2. **При `FIND_NODE(target)`**, если `target == sybil_victim` —
+   возвращает **только свой Contact** (вместо реальных ближайших).
+
+**Зачем:** атакующий с **близким** к victim'у NodeID'ом (совпадает
+префикс) попадает в **тот же k-bucket**, что victim. Клиент при
+lookup'е видит Sybil'а **раньше** victim'а и **верит** ему.
+
+**Модель атаки:**
+
+- 5 Sybil'ов с **префиксом** victim'а (брутфорс через
+  `gen_sybil_identity.sh`).
+- Sybil'ы **подключаются** к seed'у, попадают в routing.
+- `single` lookup — **клиент** попадает на Sybil'а → **0%** успеха.
+- `multipath` lookup — **голосование** игнорирует Sybil'ов → **100%** успеха.
+
+## 15. Пример: полный RPC (PING)
 
 ```
 1. TCP connect
-2. HANDSHAKE_HELLO {
-       body: { initiator_id, id_pub, eph_pub, random }
-   }
-3. HANDSHAKE_REPLY {
-       body: { responder_id, id_pub, eph_pub, random, session_id, signature }
-   }
-4. HANDSHAKE_CONFIRM {
-       body: { signature }
-   }
+2. HANDSHAKE_HELLO { id, id_pub, eph_pub, rnd }
+3. HANDSHAKE_REPLY { id, id_pub, eph_pub, rnd, session_id, signature }
+4. HANDSHAKE_CONFIRM { signature }
 5. [SecureConn создан]
-
-6. PING {
-       sender: { node_id, id_alg, id_pub, host, port },
-       timestamp_ms: 1234567890
-   }
-   зашифрован AEAD с nonce = session_id[:4] || 0
-
-7. PONG {
-       responder: { ... },
-       ping_timestamp_ms: 1234567890,
-       responder_timestamp_ms: 1234567891
-   }
-   зашифрован AEAD с nonce = session_id[:4] || 0 (своё направление)
-
+6. PING { sender, timestamp_ms } — AEAD
+7. PONG { responder, ping_ts, resp_ts } — AEAD
 8. TCP close
 ```
 
-## 13. Пример: туннельная доставка
+## 16. Пример: file-transfer
 
 ```
-Alice: TUNNEL_BUILD → R1
-R1:    TUNNEL_BUILD_ACK → Alice, TUNNEL_BUILD → R2
-R2:    TUNNEL_BUILD_ACK → Alice (через R1), TUNNEL_BUILD → R3
-R3:    TUNNEL_BUILD_ACK → Alice (через R2, R1), TUNNEL_BUILD → Bob
-Bob:   TUNNEL_BUILD_OK → R3 → R2 → R1 → Alice
+Alice → R1 → R2 → Bob
 
-Alice: Tunnel ACTIVE, E2ESession готова.
+Alice:
+  TUNNEL_BUILD
+  ...
+  Tunnel ACTIVE
 
-Alice: TUNNEL_DATA {tunnel_id, message_id, ciphertext} → R1
-R1:    TUNNEL_DATA → R2 (не расшифровывает)
-R2:    TUNNEL_DATA → R3
-R3:    TUNNEL_DATA → Bob
-Bob:   расшифровывает, проверяет nonce, TUNNEL_ACK → R3 → R2 → R1 → Alice
-Alice: получает ACK, помечает message как доставленное.
+  InnerEnvelope{FILE_HEADER, header}  → TUNNEL_DATA
+  InnerEnvelope{FILE_CHUNK, c0}       → TUNNEL_DATA
+  InnerEnvelope{FILE_CHUNK, c1}       → TUNNEL_DATA
+  ...
+  InnerEnvelope{FILE_CHUNK, c31}      → TUNNEL_DATA
+
+Bob (dest):
+  OnFileHeader(header) → Store.Init
+  OnFileChunk(c0)      → Store.AddChunk
+  OnFileChunk(c1)      → Store.AddChunk
+  ...
+  OnFileChunk(c31)     → Complete → Reassemble
+  file saved to /recv/payload.bin
+  sha256 verified
 ```

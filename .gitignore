@@ -12,39 +12,41 @@
 *.cover
 coverage.txt
 
-# ---------- Go workspaces (не используем, но на всякий) ----------
+# ---------- Go workspaces ----------
 go.work
 go.work.sum
 
-# ---------- State / logs / metrics (локальный запуск) ----------
+# ---------- State / logs / metrics ----------
 /state/
 /logs/
 /metrics/
 /demo/
+/demo-store/
+/demo-tunnel/
+/demo-store/
 
-# ---------- Docker volumes (этап 6) ----------
-# state-docker/ содержит identity.key — секрет!
+# ---------- Docker volumes ----------
 /state-docker/
 /logs-docker/
 /metrics-docker/
 /tmp-lookup-state/
 
-# Сгенерированный docker-compose.yml — его пересоздаёт
-# scripts/docker_gen_compose.sh при каждом docker_up.
+# Сгенерированный docker-compose.yml
 /docker-compose.yml
 /docker-compose.*.yml
 !/docker-compose.template.yml
 
-# ---------- File-transfer (этап 7) ----------
+# ---------- File-transfer ----------
 /recv-files/
 /send-files/
 /sent-files/
 /testdata/*.bin
 /testdata/*.dat
 /testdata/*.iso
+/testdata/*.img
 /testdata/large/
 
-# ---------- Netem / underlay backup (этап 7) ----------
+# ---------- Netem / underlay backup ----------
 /netem-backup/
 /nftables-backup/
 /netns-backup/
@@ -61,7 +63,6 @@ go.work.sum
 !docs/**/*.svg
 
 # ---------- Secrets ----------
-# Приватные ключи идентичности — никогда в git!
 *.key
 *.pem
 *.crt
@@ -70,6 +71,7 @@ go.work.sum
 identity.key
 **/state/**/identity.key
 **/state-docker/**/identity.key
+**/identity.pub
 
 # ---------- Environment / local config ----------
 .env
@@ -109,7 +111,6 @@ temp/
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
 .venv/
 venv/

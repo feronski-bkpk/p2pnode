@@ -66,6 +66,7 @@ func HandleFindNode(
 	checker routing.LivenessChecker,
 	conn transport.Conn,
 	frame protocol.Frame,
+	sybil *SybilConfig,
 ) error {
 	var req protocol.FindNodeRequestPayload
 	if err := protocol.Decode(frame.Payload, &req); err != nil {
@@ -78,6 +79,27 @@ func HandleFindNode(
 	}
 
 	target := routing.ID(req.TargetNodeID)
+
+	if sybil != nil && sybil.Enabled && sybil.Victim != "" {
+		if target.String() == sybil.Victim {
+			resp := protocol.FindNodeResponsePayload{
+				Responder:    local.ToProtocol(),
+				TargetNodeID: req.TargetNodeID,
+				Contacts:     []protocol.Contact{local.ToProtocol()},
+			}
+			payload, err := protocol.Encode(resp)
+			if err != nil {
+				return err
+			}
+			return conn.WriteFrame(protocol.Frame{
+				Version:   protocol.Version,
+				Type:      protocol.MsgFindNodeResponse,
+				RequestID: frame.RequestID,
+				Payload:   payload,
+			})
+		}
+	}
+
 	closest := table.Closest(target, table.K())
 
 	all := make([]routing.Contact, 0, len(closest)+1)

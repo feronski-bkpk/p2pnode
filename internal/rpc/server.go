@@ -14,6 +14,11 @@ import (
 	"p2pnode/internal/transport"
 )
 
+type SybilConfig struct {
+	Enabled bool
+	Victim  string
+}
+
 type Server struct {
 	Local    routing.Contact
 	Identity *identity.Identity
@@ -24,6 +29,8 @@ type Server struct {
 	Ev       *events.Logger
 
 	TunnelHandler func(conn transport.Conn, frame protocol.Frame) error
+
+	SybilConfig *SybilConfig
 
 	ln transport.Listener
 }
@@ -157,7 +164,7 @@ func (s *Server) dispatch(conn transport.Conn, frame protocol.Frame) {
 	case protocol.MsgPing:
 		err = HandlePing(s.Local, s.Table, s.Checker, conn, frame)
 	case protocol.MsgFindNodeRequest:
-		err = HandleFindNode(s.Local, s.Table, s.Checker, conn, frame)
+		err = HandleFindNode(s.Local, s.Table, s.Checker, conn, frame, s.SybilConfig)
 	case protocol.MsgStoreRequest:
 		err = HandleStore(s.Local, s.Table, s.Store, s.Checker, conn, frame, s.Ev)
 	case protocol.MsgFindValueRequest:

@@ -104,6 +104,8 @@ echo "[gen] N=$N scheme=$SCHEME output=$OUT user=$UID_GID"
         echo "    container_name: ${PROJECT}-${svc}"
         echo "    hostname: $host"
         echo "    user: \"$UID_GID\""
+        echo "    cap_add:"
+        echo "      - NET_ADMIN"
         echo "    networks: [$NETWORK]"
         echo "    ports:"
         echo "      - \"$port:$port\""
@@ -120,12 +122,19 @@ echo "[gen] N=$N scheme=$SCHEME output=$OUT user=$UID_GID"
         if [ "$i" -eq 1 ]; then
             echo "      PUBLISH_SELF: \"true\""
             echo "      PUBLISH_WAIT_MS: \"15000\""
+        else
+            echo "      PUBLISH_SELF: \"true\""
+            echo "      PUBLISH_WAIT_MS: \"20000\""
         fi
+        echo "      RECV_FILE_DIR: /recv"
+        echo "      RELAY_SELECT_MODE: \"${RELAY_SELECT_MODE:-ranked}\""
         if [ -n "$BOOT" ]; then
             echo "      BOOTSTRAP_PEERS: \"$BOOT\""
         fi
         echo "    volumes:"
         echo "      - ./state-docker/$svc:/state"
+        echo "      - ./state-docker/$svc-send:/send"
+        echo "      - ./state-docker/$svc-recv:/recv"
         echo "      - ./logs-docker/$svc:/logs"
         echo "      - ./metrics-docker/$svc:/metrics"
         echo "    restart: unless-stopped"
@@ -135,6 +144,48 @@ echo "[gen] N=$N scheme=$SCHEME output=$OUT user=$UID_GID"
         fi
         echo
     done
+
+    if [ "${WITH_SYBIL:-0}" = "1" ]; then
+        SYBIL_COUNT_VAL="${SYBIL_COUNT:-5}"
+        SYBIL_VICTIM_VAL="${SYBIL_VICTIM:-}"
+
+        echo "  # ===== E7-8: Sybil-узлы (атака на $SYBIL_VICTIM_VAL) ====="
+
+        for j in $(seq 1 "$SYBIL_COUNT_VAL"); do
+            sybil_svc="sybil-$(printf '%02d' "$j")"
+            sybil_port=$((9100 + j))
+
+            echo "  $sybil_svc:"
+            echo "    image: $IMAGE"
+            echo "    container_name: ${PROJECT}-${sybil_svc}"
+            echo "    hostname: $sybil_svc"
+            echo "    user: \"$UID_GID\""
+            echo "    cap_add:"
+            echo "      - NET_ADMIN"
+            echo "    networks: [$NETWORK]"
+            echo "    ports:"
+            echo "      - \"$sybil_port:$sybil_port\""
+            echo "    environment:"
+            echo "      NODE_STATE_DIR: /state"
+            echo "      LISTEN_HOST: \"0.0.0.0\""
+            echo "      ADVERTISE_HOST: $sybil_svc"
+            echo "      LISTEN_PORT: \"$sybil_port\""
+            echo "      LOG_LEVEL: \"INFO\""
+            echo "      K_BUCKET_SIZE: \"4\""
+            echo "      ALPHA: \"3\""
+            echo "      BOOTSTRAP_PEERS: \"node-01:9001\""
+            echo "      SYBIL_MODE: \"true\""
+            echo "      SYBIL_VICTIM: \"$SYBIL_VICTIM_VAL\""
+            echo "    volumes:"
+            echo "      - ./state-docker/$sybil_svc:/state"
+            echo "      - ./logs-docker/$sybil_svc:/logs"
+            echo "      - ./metrics-docker/$sybil_svc:/metrics"
+            echo "    restart: unless-stopped"
+            echo "    depends_on:"
+            echo "      - node-01"
+            echo
+        done
+    fi
 
     echo "networks:"
     echo "  $NETWORK:"

@@ -7,11 +7,13 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"p2pnode/internal/config"
 	"p2pnode/internal/events"
+	"p2pnode/internal/filetransfer"
 	"p2pnode/internal/identity"
 	"p2pnode/internal/protocol"
 	"p2pnode/internal/routing"
@@ -125,6 +127,15 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 	}
 	st := store.New()
 	srv := rpc.NewServer(local, id, table, st, checker, log, ev)
+
+	if cfg.SybilMode {
+		srv.SybilConfig = &rpc.SybilConfig{
+			Enabled: true,
+			Victim:  strings.ToLower(cfg.SybilVictim),
+		}
+		log.Warn("node: SYBIL MODE ENABLED",
+			"victim", cfg.SybilVictim)
+	}
 
 	ev.Log("server_started", map[string]any{
 		"addr":           ln.Addr(),
@@ -297,4 +308,77 @@ func splitListenAddr(addr string) (string, uint16, error) {
 		return "", 0, err
 	}
 	return host, uint16(p), nil
+}
+
+func (n *Node) SendFile(
+	ctx context.Context,
+	destID [32]byte,
+	path string,
+	chunkSize uint32,
+) (*filetransfer.Header, filetransfer.Progress, error) {
+	if n.tunnelMgr == nil {
+		return nil, filetransfer.Progress{},
+			fmt.Errorf("node: tunnel manager not initialized")
+	}
+	return n.tunnelMgr.SendFile(ctx, destID, path, chunkSize)
+}
+
+func (n *Node) StartFileReceiver(ctx context.Context, dir string) error {
+	if n.tunnelMgr == nil {
+		return fmt.Errorf("node: tunnel manager not initialized")
+	}
+	return n.tunnelMgr.StartFileReceiver(ctx, dir)
+}
+
+func (n *Node) LookupNodeMultiPath(target routing.ID) (rpc.MultiPathResult, error) {
+	paths := n.Config.LookupPaths
+	if paths <= 1 || len(n.Config.BootstrapPeers) == 0 {
+		res := n.Client.LookupNode(n.Local, n.Table, target, rpc.LookupConfig{
+			Alpha:   n.Config.Alpha,
+			K:       n.Config.KBucketSize,
+			Timeout: n.Config.PingTimeout,
+		})
+		return rpc.MultiPathResult{
+			Target:    target,
+			Paths:     []rpc.LookupResult{res},
+			PathCount: 1,
+			Winner:    rpc.ExtractTargetAddr(res),
+			Agreement: 1,
+			Duration:  res.Duration,
+		}, nil
+	}
+
+	seeds := make([]routing.Contact, 0, len(n.Config.BootstrapPeers))
+	for _, addr := range n.Config.BootstrapPeers {
+		seed, err := n.Client.Ping(n.Local, addr, nil, n.Config.PingTimeout)
+		if err != nil {
+			n.Log.Warn("multipath: ping seed failed", "addr", addr, "err", err)
+			continue
+		}
+		seeds = append(seeds, seed)
+	}
+
+	if len(seeds) == 0 {
+		return rpc.MultiPathResult{}, fmt.Errorf("multipath: no live seeds")
+	}
+
+	pingFn := func(seed routing.Contact) (*routing.RoutingTable, error) {
+		tbl := routing.NewRoutingTable(n.Identity.NodeID, n.Config.KBucketSize)
+		tbl.Add(seed, nil)
+		return tbl, nil
+	}
+
+	result := n.Client.LookupNodeMultiPath(
+		n.Local,
+		seeds,
+		target,
+		paths,
+		rpc.LookupConfig{
+			Alpha:   n.Config.Alpha,
+			K:       n.Config.KBucketSize,
+			Timeout: n.Config.PingTimeout,
+		},
+		pingFn,
+	)
+	return result, nil
 }

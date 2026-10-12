@@ -18,7 +18,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # ---------- runtime stage ----------
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata bash netcat-openbsd
+RUN apk add --no-cache ca-certificates tzdata bash netcat-openbsd \
+    iproute2 nftables
 
 COPY --from=build /out/node /usr/local/bin/node
 

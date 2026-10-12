@@ -6,6 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vmihailenco/msgpack/v5"
+
+	"p2pnode/internal/filetransfer"
 	"p2pnode/internal/protocol"
 )
 
@@ -18,8 +21,10 @@ type Session struct {
 	pending   map[MessageID]chan struct{}
 
 	onMessage func(Message)
+	onClosed  func(*Session)
 
-	onClosed func(*Session)
+	onFileHeader func(*filetransfer.Header)
+	onFileChunk  func(filetransfer.Chunk)
 
 	log *slog.Logger
 
@@ -43,6 +48,14 @@ func NewSession(t *Tunnel, conn RawConn, e2e *E2ESession, log *slog.Logger) *Ses
 
 func (s *Session) SetOnMessage(cb func(Message)) {
 	s.onMessage = cb
+}
+
+func (s *Session) SetFileCallbacks(
+	onHeader func(*filetransfer.Header),
+	onChunk func(filetransfer.Chunk),
+) {
+	s.onFileHeader = onHeader
+	s.onFileChunk = onChunk
 }
 
 func (s *Session) Start() {
@@ -112,8 +125,33 @@ func (s *Session) SendMessageWithID(msgID MessageID, text string, ackTimeout tim
 	default:
 	}
 
+	env := protocol.InnerEnvelope{
+		InnerType: protocol.InnerAppText,
+		InnerData: []byte(text),
+	}
+	envBuf, err := msgpack.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("tunnel: marshal envelope: %w", err)
+	}
+
+	return s.sendEnvelopeBytes(msgID, envBuf, ackTimeout)
+}
+
+func (s *Session) SendBytesWithID(msgID MessageID, payload []byte, ackTimeout time.Duration) error {
+	if !s.Tunnel.State().CanSend() {
+		return fmt.Errorf("%w: state=%v", ErrTunnelNotActive, s.Tunnel.State())
+	}
+	select {
+	case <-s.closeCh:
+		return ErrTunnelClosed
+	default:
+	}
+	return s.sendEnvelopeBytes(msgID, payload, ackTimeout)
+}
+
+func (s *Session) sendEnvelopeBytes(msgID MessageID, envelope []byte, ackTimeout time.Duration) error {
 	counter := s.E2E.NextSendNonce()
-	ct, err := sealE2E(s.E2E.SendKey, counter, []byte(text), s.Tunnel.ID[:])
+	ct, err := sealE2E(s.E2E.SendKey, counter, envelope, s.Tunnel.ID[:])
 	if err != nil {
 		return fmt.Errorf("tunnel: seal e2e: %w", err)
 	}
@@ -289,18 +327,75 @@ func (s *Session) handleIncomingData(data *protocol.TunnelDataPayload) {
 		s.log.Warn("tunnel: decrypt error", "err", err)
 		return
 	}
+	s.Tunnel.IncRecv()
 
+	msgID := MessageID(data.MessageID)
+
+	var env protocol.InnerEnvelope
+	if err := msgpack.Unmarshal(plaintext, &env); err != nil {
+		s.log.Debug("tunnel: legacy raw text received", "err", err)
+		s.dispatchMessage(msgID, string(plaintext))
+		return
+	}
+
+	switch env.InnerType {
+	case protocol.InnerAppText:
+		s.dispatchMessage(msgID, string(env.InnerData))
+
+	case protocol.InnerFileHeader:
+		var h protocol.FileHeaderPayload
+		if err := msgpack.Unmarshal(env.InnerData, &h); err != nil {
+			s.log.Warn("tunnel: bad file header", "err", err)
+			return
+		}
+		if s.onFileHeader != nil {
+			s.onFileHeader(&filetransfer.Header{
+				FileID:      filetransfer.FileID(h.FileID),
+				Name:        h.Name,
+				TotalSize:   h.TotalSize,
+				TotalChunks: h.TotalChunks,
+				SHA256:      h.SHA256,
+				ChunkSize:   h.ChunkSize,
+			})
+		}
+
+	case protocol.InnerFileChunk:
+		var c protocol.FileChunkPayload
+		if err := msgpack.Unmarshal(env.InnerData, &c); err != nil {
+			s.log.Warn("tunnel: bad file chunk", "err", err)
+			return
+		}
+		if s.onFileChunk != nil {
+			s.onFileChunk(filetransfer.Chunk{
+				FileID:      filetransfer.FileID(c.FileID),
+				ChunkIndex:  c.ChunkIndex,
+				ChunkSHA256: c.ChunkSHA256,
+				Data:        c.Data,
+			})
+		}
+
+	case protocol.InnerFileAck:
+		s.log.Debug("tunnel: file ack inner", "msg_id", msgID.Short())
+
+	case protocol.InnerFileDone:
+		s.log.Info("tunnel: file done inner", "msg_id", msgID.Short())
+
+	default:
+		s.log.Warn("tunnel: unknown inner type",
+			"inner_type", env.InnerType, "msg_id", msgID.Short())
+	}
+}
+
+func (s *Session) dispatchMessage(msgID MessageID, text string) {
 	msg := Message{
-		MessageID: MessageID(data.MessageID),
+		MessageID: msgID,
 		FromID:    s.Tunnel.Dest.NodeID,
 		ToID:      s.Tunnel.Initiator.NodeID,
-		Text:      string(plaintext),
+		Text:      text,
 		Timestamp: time.Now(),
 		Delivered: true,
 		Direction: Incoming,
 	}
-	s.Tunnel.IncRecv()
-
 	if s.onMessage != nil {
 		s.onMessage(msg)
 	}

@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"fmt"
+	"net"
 	"sync"
 	"time"
 )
@@ -12,6 +14,7 @@ type ProfileStore struct {
 
 type RelayProfile struct {
 	NodeID              [32]byte      `json:"node_id"`
+	Subnet              string        `json:"subnet"`
 	Successes           uint64        `json:"successes"`
 	Failures            uint64        `json:"failures"`
 	SuccessEMA          float64       `json:"success_ema"`
@@ -61,6 +64,13 @@ func (s *ProfileStore) RecordFailure(id [32]byte) {
 	p.ConsecutiveFailures++
 
 	p.SuccessEMA = (1 - emaAlpha) * p.SuccessEMA
+}
+
+func (s *ProfileStore) RecordAddr(id [32]byte, addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.getOrCreate(id)
+	p.Subnet = subnetOf(addr)
 }
 
 func (s *ProfileStore) Get(id [32]byte) (*RelayProfile, bool) {
@@ -116,6 +126,15 @@ func (s *ProfileStore) Rank(candidates [][32]byte) [][32]byte {
 	return out
 }
 
+func (s *ProfileStore) SubnetOf(id [32]byte) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if p, ok := s.profiles[id]; ok {
+		return p.Subnet
+	}
+	return ""
+}
+
 func (s *ProfileStore) Snapshot() []RelayProfile {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -137,4 +156,33 @@ func (s *ProfileStore) getOrCreate(id [32]byte) *RelayProfile {
 		s.profiles[id] = p
 	}
 	return p
+}
+
+func subnetOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return ""
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return ""
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			return ip.String() + "/64"
+		}
+		return net.IPv4(ip4[0], ip4[1], ip4[2], 0).String() + "/24"
+	}
+
+	var n int
+	if _, err := fmt.Sscanf(host, "node-%02d", &n); err == nil && n > 0 {
+		zone := (n-1)/3 + 1
+		return fmt.Sprintf("zone-%d/24", zone)
+	}
+	return ""
 }

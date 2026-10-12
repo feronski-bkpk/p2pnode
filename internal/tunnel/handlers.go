@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vmihailenco/msgpack/v5"
+
 	"p2pnode/internal/crypto"
+	"p2pnode/internal/filetransfer"
 	"p2pnode/internal/protocol"
 )
 
@@ -26,6 +29,9 @@ type HandlerConfig struct {
 	Manager *Manager
 
 	Trace *Trace
+
+	OnFileHeader func(*filetransfer.Header)
+	OnFileChunk  func(filetransfer.Chunk)
 }
 
 func (hc *HandlerConfig) HandleTunnelBuild(conn RawConn, frame protocol.Frame) error {
@@ -302,6 +308,10 @@ func (hc *HandlerConfig) handleDestData(conn RawConn, frame protocol.Frame, e2e 
 		Details:   map[string]any{"size": len(plaintext)},
 	})
 
+	if err := hc.dispatchInner(plaintext); err != nil {
+		hc.Log.Warn("tunnel: dispatch inner", "err", err)
+	}
+
 	ack := protocol.TunnelAckPayload{
 		TunnelID:  data.TunnelID,
 		MessageID: data.MessageID,
@@ -312,6 +322,73 @@ func (hc *HandlerConfig) handleDestData(conn RawConn, frame protocol.Frame, e2e 
 		Type:    protocol.MsgTunnelAck,
 		Payload: ackPayload,
 	})
+}
+
+func (hc *HandlerConfig) dispatchInner(plaintext []byte) error {
+	var env protocol.InnerEnvelope
+	if err := msgpack.Unmarshal(plaintext, &env); err != nil {
+		hc.Log.Debug("tunnel: inner unmarshal failed, treating as raw text",
+			"err", err, "size", len(plaintext))
+		return nil
+	}
+
+	switch env.InnerType {
+	case protocol.InnerAppText:
+		hc.Log.Info("tunnel: app text received",
+			"size", len(env.InnerData))
+
+	case protocol.InnerFileHeader:
+		var h protocol.FileHeaderPayload
+		if err := msgpack.Unmarshal(env.InnerData, &h); err != nil {
+			return fmt.Errorf("unmarshal file header: %w", err)
+		}
+		hdr := &filetransfer.Header{
+			FileID:      filetransfer.FileID(h.FileID),
+			Name:        h.Name,
+			TotalSize:   h.TotalSize,
+			TotalChunks: h.TotalChunks,
+			SHA256:      h.SHA256,
+			ChunkSize:   h.ChunkSize,
+		}
+		if hc.OnFileHeader != nil {
+			hc.OnFileHeader(hdr)
+		}
+		hc.Log.Info("tunnel: file header received",
+			"file_id", hdr.FileID.Short(),
+			"name", hdr.Name,
+			"size", hdr.TotalSize,
+			"chunks", hdr.TotalChunks)
+
+	case protocol.InnerFileChunk:
+		var c protocol.FileChunkPayload
+		if err := msgpack.Unmarshal(env.InnerData, &c); err != nil {
+			return fmt.Errorf("unmarshal file chunk: %w", err)
+		}
+		chunk := filetransfer.Chunk{
+			FileID:      filetransfer.FileID(c.FileID),
+			ChunkIndex:  c.ChunkIndex,
+			ChunkSHA256: c.ChunkSHA256,
+			Data:        c.Data,
+		}
+		if hc.OnFileChunk != nil {
+			hc.OnFileChunk(chunk)
+		}
+		hc.Log.Debug("tunnel: file chunk received",
+			"file_id", chunk.FileID.Short(),
+			"idx", chunk.ChunkIndex,
+			"size", len(chunk.Data))
+
+	case protocol.InnerFileAck:
+		hc.Log.Debug("tunnel: file ack inner")
+
+	case protocol.InnerFileDone:
+		hc.Log.Info("tunnel: file done inner")
+
+	default:
+		hc.Log.Warn("tunnel: unknown inner type",
+			"inner_type", env.InnerType)
+	}
+	return nil
 }
 
 func (hc *HandlerConfig) sendBuildFail(conn RawConn, frame protocol.Frame,

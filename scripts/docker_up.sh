@@ -40,8 +40,12 @@ if [ "$CLEAN" = "--clean" ] || [ ! -d "$ROOT_DIR/state-docker/node-01" ]; then
            "$ROOT_DIR/metrics-docker" 2>/dev/null || true
 fi
 
-echo "[up] building image $IMAGE..."
-docker build -t "$IMAGE" "$ROOT_DIR"
+if [ "${4:-}" != "--no-build" ]; then
+    echo "[up] building image $IMAGE..."
+    docker build -t "$IMAGE" "$ROOT_DIR"
+else
+    echo "[up] skipping build (--no-build)"
+fi
 
 "$ROOT_DIR/scripts/docker_gen_compose.sh" "$N" "$SCHEME" "$COMPOSE_FILE"
 
@@ -53,6 +57,8 @@ mkdir -p "$ROOT_DIR/state-docker" "$ROOT_DIR/logs-docker" "$ROOT_DIR/metrics-doc
 for i in $(seq 1 "$N"); do
     idx=$(printf '%02d' "$i")
     mkdir -p "$ROOT_DIR/state-docker/node-$idx" \
+             "$ROOT_DIR/state-docker/node-$idx-send" \
+             "$ROOT_DIR/state-docker/node-$idx-recv" \
              "$ROOT_DIR/logs-docker/node-$idx" \
              "$ROOT_DIR/metrics-docker/node-$idx"
 done

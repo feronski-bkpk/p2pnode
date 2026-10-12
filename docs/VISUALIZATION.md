@@ -1,9 +1,8 @@
 # Визуализация p2pnode
 
-Документ описывает инструменты визуализации, реализованные в проекте:
-Graphviz-графы, HTML-отчёт с D3.js, сравнение bootstrap-схем, event
-stream. Приведены полные команды запуска, ожидаемый вывод и правила
-интерпретации.
+Документ описывает инструменты визуализации: Graphviz-графы,
+HTML-отчёт с D3.js, сравнение bootstrap-схем, event stream, а также
+**метрики всех экспериментов этапов 6 и 7**.
 
 ## 1. Обзор
 
@@ -11,323 +10,219 @@ stream. Приведены полные команды запуска, ожид�
 
 1. **Демонстрация невырожденности DHT** — граф сети, топ-k контактов,
    распределение по bucket'ам.
-2. **Проверка алгоритмов** — routing-таблицы, lookup-логи с трассами
-   итераций, пути туннелей, доказательство E2E-шифрования.
-3. **Сравнение конфигураций** — star vs ring, msgpack vs JSON vs gob.
+2. **Проверка алгоритмов** — routing-таблицы, lookup-логи, пути
+   туннелей, доказательство E2E-защиты, **метрики всех E7-экспериментов**.
+3. **Сравнение конфигураций** — star vs ring vs tree vs multiseed,
+   msgpack vs JSON vs gob, режимы выбора ретранслятора, single vs
+   multipath lookup.
 
-Все инструменты в `scripts/`. Основной результат — `report.html`
-(один файл, открывается в браузере, не требует сети).
+Основной результат — `report.html` (один файл, открывается в браузере).
 
-## 2. Что уже реализовано
+## 2. Артефакты экспериментов
 
-| Инструмент | Файл | Что делает |
-|------------|------|------------|
-| HTML-отчёт | `scripts/generate_report.sh` | Собирает все артефакты в `report.html` |
-| Шаблон отчёта | `scripts/report_template.html` | CSS + D3.js + логика рендера |
-| Graphviz-графы | `scripts/visualize.sh` | DOT/PNG/SVG-графы в 5 режимах |
-| Star vs Ring | `scripts/compare_visual.sh` | Прогон двух схем, сравнение, `summary.json` |
-| Сериализация | `scripts/compare_serialization.sh` | msgpack / JSON / gob — размер + скорость |
-| Сбор routing | `scripts/collect_routing.sh` | Экспорт routing-снапшотов с узлов |
-| Lookup-батч | `scripts/lookup_batch.sh` | 30 контрольных lookup'ов с трассами |
-| Проверка DHT | `scripts/check_ne_degenerate.sh` | Критерии E6-3 в консоль |
-| Event stream | `internal/events` | JSONL-лог событий каждого узла |
+Каждый эксперимент складывает артефакты в
+`visualization/<experiment>/`:
+
+| Эксперимент | Директория | Ключевой файл |
+|-------------|-----------|---------------|
+| Docker star/ring/tree/multiseed | `metrics/collected/` | `routing-*.json` |
+| File transfer | `visualization/file-transfer/` | `summary.json` |
+| Underlay | `visualization/underlay/` | `summary.json`, `rules.json` |
+| Netem | `visualization/netem/` | `summary.json` |
+| Relay selection | `visualization/relay-selection/` | `summary.json` |
+| Eclipse | `visualization/eclipse/` | `summary.json` |
+| Bootstrap-4 | `visualization/bootstrap-4-docker/` | `summary.json` |
+| Regressions | `visualization/regression/` | `summary.json` |
 
 ## 3. Быстрый старт: полный эксперимент
 
 ```bash
 cd ~/p2pnode
 
-# 1. Очистить старые артефакты (важно! иначе данные смешаются)
 rm -rf /tmp/p2pnode-demo-*
 rm -rf metrics/collected metrics/lookups metrics/trace visualization
 
-# 2. Собрать бинарник
 go build ./...
-
-# 3. Полный прогон N=15, 20 секунд сходимости, со сравнением схем
 WITH_COMPARE=1 ./scripts/run_experiment.sh 15 20
 
-# 4. Открыть отчёт
 xdg-open report.html
 ```
 
-**Что происходит по шагам:**
-
-1. `run_experiment.sh` вызывает `stop_all.sh`, чистит `metrics/`, `logs/`, `state/`.
-2. `run_star.sh 15` — запускает 15 узлов star-схемой (порты 9001–9015).
-3. Ждёт 20 сек сходимости.
-4. `collect_routing.sh` — собирает routing-снапшоты в `metrics/collected/`.
-5. `lookup_batch.sh` — 30 контрольных lookup'ов в `metrics/lookups/`.
-6. `check_ne_degenerate.sh` — проверяет невырожденность, печатает результат.
-7. Если `WITH_COMPARE=1`: `compare_visual.sh` (star vs ring) + `compare_serialization.sh`.
-8. `generate_report.sh` — собирает `report.html`.
-
-**Ожидаемый вывод в конце:**
+**Ожидаемый вывод:**
 
 ```
 [report] routing snapshots: 15
 [report] edges: ~100
 [report] lookups: 30
-[report] traces: 0 (или N из текущего прогона)
-[report] verify: yes/no
 [report] degeneracy: yes
-[report] starRing: yes (если WITH_COMPARE=1)
-[report] serialization: yes (если WITH_COMPARE=1)
+[report] starRing: yes
+[report] serialization: yes
 [report] wrote /home/feronski/p2pnode/report.html
 ```
 
-Если `lookups: 0` или `routing snapshots` не совпадает с N — смотреть раздел 9 «Диагностика».
-
-## 4. HTML-отчёт — что внутри
-
-Единый `report.html`, открывается в браузере. Состоит из секций:
+## 4. Секции HTML-отчёта
 
 ### 4.1. Обзор
 
-Metric-cards: узлов, рёбер (mutual/asym), mean table size (min/max),
-lookup'ов (успешных/всего), событий туннеля, DHT-статус.
-
-**Как читать:**
-- **DHT-статус OK** — все 4 критерия E6-3 выполнены (см. секцию ниже).
-- **DHT-статус FAIL** — хотя бы один критерий не выполнен, детали в
-  секции «Невырожденность».
-- **Рёбер → mutual** — большинство рёбер в Kademlia взаимные (A знает
-  B и B знает A). Если mutual мало — плохой признак, узлы плохо
-  сходятся.
+Metric-cards: узлов, рёбер (mutual/asym), mean table size, lookup'ов,
+событий туннеля, DHT-статус.
 
 ### 4.2. Невырожденность DHT
 
 Четыре критерия с бейджами ✓/✗/—:
 
-| Критерий | Что проверяет | Порог |
-|----------|---------------|-------|
+| Критерий | Проверяет | Порог |
+|----------|-----------|-------|
 | 1 | ≥80% узлов имеют < N-1 контактов | `pct_less >= 80%` |
-| 1b | Ни один узел не имеет полный реестр | `max_size < N-1` |
-| 2 | Все lookup'ы с target, отсутствовавшим до старта | `absent_at_start = true` |
-| 3 | Все lookup'ы с RPC ≥ 2 (промежуточный узел) | `rpc >= 2` |
-
-**Как читать:**
-- **NON-DEGENERATE** — все 4 критерия ✓. DHT не вырождена в полный
-  каталог, lookup'ы действительно многошаговые.
-- **DEGENERATE** — хотя бы один ✗. Например, если все узлы знают
-  всех (критерий 1b нарушен), DHT бесполезна.
-- **— (жёлтый)** — критерий не проверен, потому что нет данных
-  (например, `lookups = []`). Это не FAIL, а «нечего проверять».
-
-**Таблица размеров** — каждый узел, его `size`, процент от `N-1`.
-Полезна для поиска выбросов: один узел с size=N-1 означает, что он
-знает всю сеть (что нормально для seed'а в star-схеме).
+| 1b | ≤1 узел имеет полный реестр (seed может) | `count(size=N-1) <= 1` |
+| 2 | Все lookup'ы с `target_absent_at_start` | `absent >= 30` |
+| 3 | ≥80% lookup'ов с `RPC >= 2` | `pct_interm >= 80%` |
 
 ### 4.3. Граф сети (D3.js)
 
-Force-directed layout. Управление:
-
-| Элемент | Что делает |
-|---------|------------|
-| Режим `overlay` | Все рёбра (плотно) |
-| Режим `topk` | 3 ближайших по XOR на узел (разреженный) |
-| Режим `tree` | Только исходящие рёбра seed'а |
-| Чекбокс «Подписи» | Показывать/скрывать ID узлов |
-| Чекбокс «Стрелки» | Показывать направление рёбер |
-| Чекбокс «Только взаимные» | Оставить только mutual-рёбра |
-| Клик на узел | Подсветить связи выбранного узла |
-| Drag | Перетаскивать узлы |
-
-**Цвета:**
-- **Оранжевый узел** — seed (узел с максимальным in-degree).
-- **Голубой узел** — обычный узел.
-- **Зелёное ребро** — mutual (A→B и B→A).
-- **Красное ребро** — asymmetric (только A→B).
-
-**Как читать:**
-- **Одна связная компонента** — сеть корректно сходится. Если
-  граф распадается на 2+ компоненты — это либо смешение данных из
-  разных прогонов (см. раздел 9), либо узлы не нашли друг друга.
-- **Много mutual (зелёных)** — здоровое состояние Kademlia.
-- **Много asym (красных)** — некоторые узлы не отвечают на PING или
-  добавлены недавно (ещё не подтверждены).
-- **Изолированные узлы** — узлы без рёбер. В star-схеме возможны на
-  раннем этапе, если bootstrap не завершился.
-- **Сильно разный размер узлов** — размер пропорционален `size`
-  (числу контактов в routing-таблице). Seed в star-схеме — крупнее.
+Режимы `overlay` / `topk` / `tree`. Клик на узел — подсветка связей.
+Оранжевый — seed, голубой — обычный, зелёное ребро — mutual, красное — asym.
 
 ### 4.4. Туннель
 
-Появляется только если есть `trace.json` хотя бы с одним событием.
-
-Управление:
-- Выбор trace'а (из `metrics/trace/` или `/tmp/p2pnode-demo-*/`).
-- Режим `chain` — только путь туннеля (initiator → relays → dest).
-- Режим `network` — полный граф сети, поверх — путь туннеля.
-- Чекбокс «Анимация» — красные точки движутся по tunnel-рёбрам.
-- Чекбокс «Временная шкала» — события trace'а внизу.
-
-**Цвета узлов:**
-- **Голубой** — initiator (Alice).
-- **Жёлтый** — ретранслятор (relay).
-- **Зелёный** — dest (Bob).
-- **Серый** — не участвует в туннеле.
-
-**Как читать:**
-- Должно быть **5 узлов в цепочке**: 1 initiator + 3 relay + 1 dest.
-  Если меньше — либо `max-hops` меньше, либо ретрансляторов не хватило.
-- **Клик на узел** — tooltip: role, что видит узел (relay видит
-  `tunnel_id`, `next_hop`, но не payload).
-- **Временная шкала** — события с временем, tunnel_id, message_id,
-  hop_index. Полезна для отладки: видно, что ACK'и от ретрансляторов
-  пришли раньше, чем BUILD_OK от dest.
+Появляется, если есть `trace.json`. Цвета: голубой — initiator,
+жёлтый — relay, зелёный — dest. Режимы `chain` / `network`.
 
 ### 4.5. Трафик
 
-Появляется, если найден `verify.json` (из `capture_and_verify.sh`).
+Из `verify.json` (`capture_and_verify.sh`). Показывает: plaintext в
+pcap, keywords, acked, received.
 
-**Что показывает:**
-- Таблица проверок: plaintext в pcap, keywords протокола, acked,
-  received.
-- Перехваченные кадры: тип, заголовок, payload (msgpack + AEAD-hex).
+### 4.6. Lookup-агрегаты
 
-**Как читать:**
-- **Plaintext в pcap → «не найден ✓»**
-- **Ключевые слова протокола → «0 ✓»** — msgpack-поля (`tunnel_id`,
-  `dest_id`) зашифрованы handshake'ом и не читаются в pcap.
-- **AEAD ciphertext** (красным) — реальный шифротекст, без ключей
-  не расшифровать.
-- **msgpack** (серым) — поля протокола для маршрутизации (видны
-  ретранслятору, но не содержат payload).
+Всего lookup'ов, found, absent, RPC (min/mean/median/p95/max),
+iterations, duration.
 
-### 4.6. Handshake AKE — схема
+### 4.7. Lookup-логи
 
-Статическая SVG-схема: 3 сообщения, 4 DH, HKDF, SecureConn.
-Не данные, а справочная диаграмма.
+Раскрывающиеся строки с трассами итераций.
 
-### 4.7. Lookup-агрегаты
+### 4.8. Routing-таблицы
 
-Появляется, если есть lookup'ы.
+Все узлы: NodeID, Size, Buckets, Max/Min fill. Фильтр, сортировка.
 
-**Метрики:**
-- Всего lookup'ов, успешных (target в final), с absent_at_start.
-- RPC: min / mean / median / p95 / max.
-- Iterations: mean / max.
-- Duration: mean / median / max (мс).
+### 4.9. Star vs Ring
 
-**Как читать:**
-- **found = 30/30** — все lookup'ы успешны.
-- **RPC median 3** — типичный lookup делает 3 RPC. Если median = 2 —
-  подозрительно мало (lookup может быть вырожденным). Если > 10 —
-  сеть плохо сходится.
-- **Iterations mean 1.6** — lookup в среднем 1.6 итерации. Хорошо.
-- **Duration mean 5 мс** — быстро. На реальной сети будет больше.
-- **p95 > max/2** — есть выбросы (медленные lookup'ы). Нормально для
-  распределённой сети.
+Сравнение bootstrap-схем (E2-8).
 
-### 4.8. Lookup-логи
+### 4.10. Star vs Ring vs Tree vs Multiseed
 
-Раскрывающиеся строки: `initiator → target` + RPC/iterations/duration
-+ бейдж found/not found.
-
-**Клик на строку → раскрыть:**
-- target_absent_at_start.
-- timeouts.
-- Финальные контакты (chip'ы с короткими ID).
-- Итерации: `iter=N · queried=X · found=Y · timeouts=Z` + chip'ы
-  queried / found / timeouts.
-
-**Как читать:**
-- **iter=0** — первый запрос к ближайшим из routing-таблицы.
-- **iter=1, 2** — расширение списка кандидатов через найденные
-  контакты.
-- **found** на iter=0 — target был у первого узла (мало итераций).
-- **found** на iter=2+ — target найден через цепочку узлов
-  (многошаговый lookup).
-- **timeouts > 0** — какой-то узел не ответил. Если timeouts только
-  в одном iter и lookup всё равно found — нормально.
-
-### 4.9. Routing-таблицы
-
-Таблица всех узлов: NodeID, Size, Buckets, Max/Min fill.
-Фильтр по ID, сортировка по size/buckets/max_fill.
-
-**Как читать:**
-- **Size = N-1** — узел знает всех. Плохо (вырождение).
-- **Size = 4** — узел знает мало. Типично для star-схемы у
-  не-seed-узлов.
-- **Buckets** — число непустых k-bucket'ов. Для N=15 обычно 3-5.
-- **Max fill** — максимальная заполненность bucket'а. Не должна
-  превышать `K=4`.
-
-### 4.10. Star vs Ring
-
-Появляется, если `WITH_COMPARE=1` или вручную запускался
-`compare_visual.sh`.
-
-**Метрики:**
-| Метрика | Что означает |
-|---------|--------------|
-| Nodes | Число узлов (должно быть одинаково) |
-| Table size min/max/mean | Заполненность routing-таблиц |
-| Buckets per node mean | Среднее число непустых bucket'ов |
-| Max bucket fill | Максимальная заполненность |
-| Edges total | Общее число рёбер |
-| Max out-degree | Максимум исходящих связей у одного узла |
-| Max in-degree | Максимум входящих (кого знают больше всех) |
-
-**Как читать:**
-- **Star: max_in_degree = 14, mean_size = 7** — все знают seed'а
-  (in-degree=14 у seed'а). Нормально для star.
-- **Ring: max_in_degree ≈ max_out_degree** — нет концентрации.
-  Равномернее.
-- **Star vs Ring: diff** — (ring - star). Знак показывает, куда
-  сдвинулось.
-- **Ring: edges > star: edges** — ring даёт больше рёбер, потому
-  что узлы знают соседей с обеих сторон.
+Сводная таблица 4 схем.
 
 ### 4.11. Сериализация
 
-Появляется, если `WITH_COMPARE=1`.
+msgpack / JSON / gob: size, encode, decode.
 
-**Таблица:** format, size (bytes), encode (µs), decode (µs).
+### 4.12. File transfer
+
+Появляется при наличии `visualization/file-transfer/summary.json`.
+
+**Что показывает:**
+
+- **Файл:** имя, размер, `sha256_src`, `sha256_recv`, `file_match`.
+- **Чанки:** количество, размер, `acked` / `total`.
+- **Время:** `duration_ms` полной передачи.
+- **Throughput:** `size_bytes / duration_ms` → КиБ/с.
 
 **Как читать:**
-- **msgpack** должен быть меньше JSON в ~1.7× и быстрее в decode.
-- **gob** может быть быстрее msgpack по encode, но медленнее в
-  decode и Go-only.
-- Если gob вдруг меньше msgpack — подозрительно, возможно разные
-  данные.
+
+- **`file_match=true`** — SHA-256 исходного и полученного совпадают.
+  Это **критерий успеха E7-4**.
+- **`chunks_acked = chunks_total`** — все чанки подтверждены.
+- **`retries = 0`** — ни один чанк не требовал повтора.
+
+### 4.13. Underlay
+
+Появляется при наличии `visualization/underlay/summary.json`.
+
+**Что показывает:**
+
+- **Конфигурация:** `scheme`, `N`, `allowed_pairs`, `blocked_pairs`.
+- **Connectivity до/после:** таблица пар (`2->1`, `2->3`, `3->4`) ×
+  (OK / BLOCKED).
+- **Lookup через разрешённые связи:** `found`, `rpc_mean`.
+
+**Как читать:**
+
+- **`before.2->1 = OK`** — до применения nftables всё разрешено.
+- **`after.2->1 = OK`** — bootstrap-связь сохранена.
+- **`after.2->3 = BLOCKED`** — не-bootstrap связь заблокирована ✓.
+- **`lookup_success_rate >= 0.5`** — DHT работает через разрешённые
+  связи.
+
+### 4.14. Netem
+
+Появляется при наличии `visualization/netem/summary.json`.
+
+**Что показывает:**
+
+- Таблица 4 режимов: `mode`, `lookup_found`, `rpc_mean`,
+  `dur_mean_ms`, `dur_p95_ms`, `file_match`, `file_send_duration_ms`.
+- Графики: lookup latency vs delay/loss.
+
+**Как читать:**
+
+| Режим | Что ожидать |
+|-------|-------------|
+| `baseline` | `dur_mean ≈ 4–15 мс`, `found=15/15`, `file_match=true` |
+| `delay-50` | `dur_mean ≈ 160 мс` (×36), `found≥13/15` |
+| `loss-5` | `dur_mean ≈ 250 мс`, `dur_p95 ≥ 1000 мс` (retry) |
+| `stress` | `dur_mean ≈ 1100 мс`, `file_match=false` (timeout) |
+
+**Ключевой вывод:** **lookup выживает** при stress (`found=14/15`),
+но **latency растёт** в **×260**.
+
+### 4.15. Relay selection
+
+Появляется при наличии `visualization/relay-selection/summary.json`.
+
+**Что показывает:**
+
+- Таблица 3 режимов: `mode`, `routes_built`, `accepted_candidates`,
+  `unique_subnets`, `subnet_diversity_rejects`, `total_duration_ms`.
+- Список `relay_addrs` — использованные ретрансляторы.
+
+**Как читать:**
+
+- **`ranked`** — **больше subnets** (3 зоны), избегает медленных
+  узлов.
+- **`random`** — **1 subnet** (случайно все в одной зоне).
+- **`subnet`** — **`subnet_diversity_rejects > 0`** — режим
+  отклоняет 2-го кандидата из одной /24.
+- **`duration_ms`** — время полного прогона (10 итераций × 1 отправка).
+
+### 4.16. Eclipse/Sybil
+
+Появляется при наличии `visualization/eclipse/summary.json`.
+
+**Что показывает:**
+
+- Таблица: `mode` (single/multipath), `lookup_paths`,
+  `correct_lookups/total`, `correct_pct`.
+- **Вердикт:** single fails vs multipath succeeds.
+
+**Как читать:**
+
+- **`single: correct=0/30 (0%)`** — атака **успешна**. Клиент верит
+  Sybil'ам.
+- **`multipath: correct=30/30 (100%)`** — **контрмера работает**.
+  Голосование игнорирует Sybil'ов.
+- **Разница > 50%** — E7-8 подтверждён.
 
 ## 5. Отдельные инструменты
 
-### 5.1. Graphviz-графы — `scripts/visualize.sh`
-
-**Назначение:** строит DOT-файлы и рендерит в PNG/SVG без браузера.
-
-**Использование:**
+### 5.1. Graphviz — `scripts/visualize.sh`
 
 ```bash
-# На конкретной директории со снапшотами
-./scripts/visualize.sh metrics/collected out/graph-overlay "Star N=15"
-
-# Или через хелпер
-./scripts/visualize.sh overlay
+./scripts/visualize.sh metrics/collected out/my-graph "N=15"
 ```
 
-**Пять режимов:**
-
-| Режим | Что показывает | Когда полезно |
-|-------|----------------|---------------|
-| `overlay` | Все рёбра | Общая картина (плотно) |
-| `mutual` | Только A↔B | Здоровье сети |
-| `asym` | Только A→B без B→A | Найти "односторонние" связи |
-| `topk` | 3 ближайших по XOR | Kademlia-структура |
-| `tree` | Иерархия seed → bucket → contacts | Топология от seed'а |
-
-**Результат:** `out/graph-<mode>.png` и `.svg`.
-
-**Как читать DOT-файлы вручную:**
-```bash
-dot -Tpng metrics/collected/*.dot -o graph.png  # если DOT есть
-# или смотреть содержимое
-head -50 out/graph-overlay.dot
-```
+5 режимов: `overlay`, `mutual`, `asym`, `topk`, `tree`.
 
 ### 5.2. Star vs Ring — `scripts/compare_visual.sh`
 
@@ -335,131 +230,80 @@ head -50 out/graph-overlay.dot
 ./scripts/compare_visual.sh 15 20
 ```
 
-Запускает два прогона (star и ring), сохраняет:
-- `visualization/star-vs-ring/star-overlay.png`
-- `visualization/star-vs-ring/ring-overlay.png`
-- `visualization/star-vs-ring/summary.json`
+Артефакт: `visualization/star-vs-ring/summary.json`.
 
-**Особенность:** `compare_visual.sh` не трогает `metrics/lookups/` —
-использует trap для сохранения/восстановления. Так что можно
-запускать после `lookup_batch.sh` без потери данных.
+### 5.3. 4 схемы — `scripts/compare_4schemes_docker.sh`
 
-### 5.3. Сериализация — `scripts/compare_serialization.sh`
+```bash
+./scripts/compare_4schemes_docker.sh 15 30
+```
+
+Артефакт: `visualization/bootstrap-4-docker/summary.json`.
+
+### 5.4. Сериализация — `scripts/compare_serialization.sh`
 
 ```bash
 ./scripts/compare_serialization.sh 1000
 ```
 
-Замеряет 1000 итераций encode/decode для `FIND_NODE_RESPONSE` в трёх
-форматах. Результат в `visualization/serialization.json`.
+Артефакт: `visualization/serialization.json`.
 
-### 5.4. Проверка невырожденности — `scripts/check_ne_degenerate.sh`
+### 5.5. Проверка невырожденности — `scripts/check_ne_degenerate.sh`
 
 ```bash
 ./scripts/check_ne_degenerate.sh
 ```
 
-Печатает в консоль:
-```
-[check] N = 15
-[check] table sizes: min=3 max=10 mean=6.67
-[check] nodes with < N-1 contacts: 15/15 (100.0%)
-[check] criterion 1 (>=80% < N-1):        True
-[check] criterion 1b (no full registry):  True
-[check] buckets per node: min=2 max=6 mean=4.07
-[check] max bucket fill:  min=1 max=4
+Вывод в консоль + `RESULT: NON-DEGENERATE` / `DEGENERATE`.
 
-[check] lookup'ов всего:               30
-[check] цель отсутствовала до старта:  30
-[check] с промежуточным узлом (RPC≥2): 30
-[check] успешных (target в final):     29
-[check] criterion 2 (>=30 absent):     True
-[check] criterion 3 (>=30 w/ interm):  True
+### 5.6. Event stream — `internal/events`
 
-[check] RESULT: NON-DEGENERATE (все критерии выполнены)
-```
-
-**Как интерпретировать:**
-- **RESULT: NON-DEGENERATE**
-- **criterion 1 True** — 100% узлов имеют <14 контактов.
-- **criterion 3 True** — 30 lookup'ов с RPC≥2, многошаговые.
-
-### 5.5. Event stream — `internal/events`
-
-**Формат:** JSONL, одна строка на событие, в `<state-dir>/events.jsonl`.
-
-**Пример:**
-```json
-{"ts":1696240123456,"node":"abcd1234","event":"conn_accepted","peer":"ef567890","addr":"127.0.0.1:9001","data":{}}
-{"ts":1696240123489,"node":"abcd1234","event":"frame_recv","peer":"ef567890","data":{"type":"PING","size":120}}
-{"ts":1696240123501,"node":"abcd1234","event":"handshake_done","peer":"ef567890","data":{"session_id":"..."}}
-```
+JSONL, `<state-dir>/events.jsonl`. Все события с timestamp, node_id, peer.
 
 **Полезные команды:**
+
 ```bash
-# Все события одного узла
 cat /tmp/node-01/events.jsonl | jq .
-
-# Все handshake за последнюю минуту
-cat /tmp/node-*/events.jsonl | \
-    jq 'select(.event=="handshake_done")' | tail -20
-
-# Топ-10 узлов по числу RPC
-cat /tmp/node-*/events.jsonl | \
-    jq -r 'select(.event=="frame_sent") | .node' | \
-    sort | uniq -c | sort -rn | head
+cat /tmp/node-*/events.jsonl | jq 'select(.event=="handshake_done")' | tail -20
 ```
 
-## 6. Event stream — детальный справочник
-
-**События (список полный):**
+## 6. Event stream — справочник
 
 | Событие | Когда | Поля |
 |---------|-------|------|
-| `identity_loaded` | При старте узла | `node_id` |
-| `server_started` | После `Listen()` | `addr` |
-| `conn_accepted` | Входящее соединение | `peer`, `addr` |
+| `identity_loaded` | При старте | `node_id` |
+| `server_started` | После Listen | `addr` |
+| `conn_accepted` | Входящее | `peer`, `addr` |
 | `conn_dialed` | Исходящее | `peer`, `addr` |
 | `frame_sent` | Кадр отправлен | `type`, `size` |
 | `frame_recv` | Кадр получен | `type`, `size` |
-| `contact_added` | Новый контакт в routing | `peer` |
-| `contact_updated` | Обновление контакта | `peer` |
-| `contact_removed` | Удаление (expire) | `peer` |
-| `bootstrap_seed` | Bootstrap-подключение | `addr` |
+| `contact_added` | Новый контакт | `peer` |
+| `contact_updated` | Обновление | `peer` |
+| `contact_removed` | Удаление | `peer` |
+| `bootstrap_seed` | Bootstrap | `addr` |
 | `lookup_start` | Начало lookup | `target` |
-| `lookup_iter` | Итерация lookup | `iter`, `queried` |
-| `lookup_done` | Конец lookup | `found`, `duration_ms` |
-| `store_start` | Начало STORE | `key` |
-| `store_accepted` | Хранитель принял | `peer` |
-| `store_rejected` | Хранитель отказал | `peer`, `reason` |
-| `store_done` | STORE завершён | `replicas` |
-| `findvalue_start` | Начало FIND_VALUE | `key` |
-| `findvalue_found` | Нашли значение | `peer` |
-| `findvalue_notfound` | Не нашли | — |
-| `handshake_start` | Начало AKE | `peer` |
-| `handshake_done` | AKE успешен | `session_id` |
-| `handshake_failed` | AKE провален | `reason` |
-| `expire` | Фоновая очистка | `count` |
-| `republish` | Re-publish записей | `count` |
-| `publish_start` | Начало publish | `node_id` |
-| `publish` | Запись опубликована | `key` |
-| `publish_done` | Publish завершён | `replicas` |
+| `lookup_iter` | Итерация | `iter`, `queried` |
+| `lookup_done` | Конец | `found`, `duration_ms` |
+| `store_start/accepted/rejected/done` | STORE | `key`, `peer` |
+| `findvalue_start/found/notfound` | FIND_VALUE | `key` |
+| `handshake_start/done/failed` | AKE | `peer`, `session_id` |
+| `expire` | Очистка | `count` |
+| `republish` | Re-publish | `count` |
+| `publish_start/publish/publish_done` | Publish | `node_id`, `key` |
 
 ## 7. Типичные сценарии
 
-### 7.1. Полный эксперимент с графиками (обычный прогон)
+### 7.1. Полный эксперимент с графиками
 
 ```bash
-cd ~/p2pnode
-rm -rf /tmp/p2pnode-demo-* metrics/collected metrics/lookups visualization
+rm -rf metrics/collected metrics/lookups visualization
 WITH_COMPARE=1 ./scripts/run_experiment.sh 15 20
 xdg-open report.html
 ```
 
-**Время:** ~2 минуты. **Что смотреть:** секции «Обзор»,
-«Невырожденность», «Граф сети», «Lookup-агрегаты», «Star vs Ring».
+**Время:** ~2 минуты.
 
-### 7.2. Только DHT-проверка (быстро)
+### 7.2. Быстрая DHT-проверка
 
 ```bash
 ./scripts/run_star.sh 15
@@ -470,100 +314,95 @@ sleep 15
 ./scripts/stop_all.sh
 ```
 
-**Время:** ~30 сек. **Что смотреть:** вывод в консоль.
+**Время:** ~30 сек.
 
-### 7.3. Проверка E2E-шифрования (pcap)
+### 7.3. File transfer
 
 ```bash
-# Один раз: даём tcpdump права
-sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)
-
-./scripts/capture_and_verify.sh
-cat /tmp/p2pnode-demo-capture/verify.json
+./scripts/demo_file_transfer.sh 5 1 2
+cat visualization/file-transfer/summary.json
 ```
 
-**Что смотреть:** `plaintext_in_pcap: false`, `protocol_keywords_in_pcap: 0`.
-
-### 7.4. Демонстрация туннеля с отказами
+### 7.4. Underlay
 
 ```bash
-./scripts/demo_tunnel.sh
-./scripts/demo_tunnel_recovery.sh
-./scripts/demo_tunnel_pool.sh
-./scripts/demo_tunnel_pcap.sh
+./scripts/demo_underlay.sh 5 star
+cat visualization/underlay/summary.json
 ```
 
-### 7.5. Сравнение bootstrap-схем
+### 7.5. Netem (по режимам)
 
 ```bash
-./scripts/compare_visual.sh 15 20
-# Смотреть: visualization/star-vs-ring/summary.json
+./scripts/demo_netem.sh baseline 5
+./scripts/demo_netem.sh delay-50 5
+./scripts/demo_netem.sh loss-5 5
+./scripts/demo_netem.sh stress 5
+./scripts/demo_netem.sh summary
 ```
 
-### 7.6. Сравнение форматов
+### 7.6. Relay selection
 
 ```bash
-./scripts/compare_serialization.sh 1000
-# Смотреть: visualization/serialization.json
+./scripts/demo_relay_selection.sh 9 10
+cat visualization/relay-selection/summary.json
+```
+
+### 7.6. Eclipse
+
+```bash
+./scripts/demo_eclipse.sh 11 3 30 5
+cat visualization/eclipse/summary.json
 ```
 
 ### 7.7. Просмотр событий в реальном времени
 
 ```bash
-# Терминал 1: запустить узел
-./bin/node -state-dir /tmp/n1 -listen-port 9001 -log-level DEBUG
-
-# Терминал 2: следить за событиями
+./bin/node -state-dir /tmp/n1 -listen-port 9001 -log-level DEBUG &
 tail -f /tmp/n1/events.jsonl | jq -c '{ts, event, peer, data}'
 ```
 
-### 7.8. Просмотр графа в Graphviz вручную
+## 8. Диагностика
 
+### 8.1. `lookups: 0` в отчёте
+
+**Причина:** `docker_lookup_batch.sh` не сохранил файлы.
+**Решение:**
 ```bash
-./scripts/visualize.sh metrics/collected out/my-graph "N=15"
-# Открыть out/my-graph.png (Linux: xdg-open)
+ls metrics/lookups/ | wc -l
+# если 0 — прогнать вручную
+./scripts/docker_lookup_batch.sh 15 30
+./scripts/docker_collect.sh
+./scripts/generate_report.sh
 ```
 
-## 8. Что планируется
+### 8.2. Данные от разных прогонов
 
-### 8.1. Real-time Web «птичий полёт»
+**Причина:** старые артефакты в `metrics/collected/`.
+**Решение:**
+```bash
+rm -rf metrics/collected metrics/lookups visualization
+./scripts/run_experiment.sh 15 20
+```
 
-**Идея:** WebSocket + D3.js с live-обновлением.
+### 8.3. Граф сети распадается на компоненты
 
-**Компоненты:**
-- `cmd/collector` — читает `events.jsonl` всех узлов, объединяет по
-  timestamp, раздаёт через WebSocket.
-- HTML-страница с D3.js, обновляется в реальном времени.
-- Анимация RPC: летящие точки между узлами.
-- Клик на узел — routing-таблица.
-- Timeline: слайдер для прокрутки истории.
+**Причина:** данные от разных прогонов смешаны.
+**Решение:** см. 8.2.
 
-### 8.2. Секция «Отказ ретранслятора»
+### 8.4. `subnet_diversity_rejects=0` во всех режимах
 
-Показ двух туннелей рядом: сломанный (relay_dead) и восстановленный
-(rebuild_ok). Граф + timeline.
+**Причина:** `ADVERTISE_HOST=node-XX`, не IP → `subnetOfContact`
+вернул "".
+**Решение:** обновлённый `subnetOfContact` эмулирует зоны
+(`node-XX → zone-Y/24`). Проверить:
+```bash
+grep -n "zone-" internal/tunnel/profile.go internal/routing/routing.go
+```
 
-**Данные:** из `demo_tunnel_recovery.sh` и `demo_tunnel_pool.sh`.
+### 8.5. Eclipse: `single=multipath=100%`
 
-### 8.3. Секция «Отказ seed'а»
-
-Две таблицы рядом: baseline lookup'ов (до kill) и after (после kill).
-Бейдж OK/FAIL: RPC ≥ 2, target найден.
-
-### 8.4. Секция «Отказ хранителя»
-
-Сохранение двух routing-снапшотов (до/после отказа). Показ:
-хранители [A,B,C] → A убит → B, C держат запись. FIND_VALUE находит.
-
-### 8.5. Секция «Передача файла»
-
-Таблица блоков: id, size, acked, sha256. Прогресс-бар. Финальный SHA
-+ бейдж «verified».
-
-### 8.6. k-buckets heatmap
-
-Матрица «узел × bucket index → число контактов». Компактно.
-
-### 8.7. Lookup path visualization
-
-Для выбранного lookup — граф: initiator → first queried → ... → target.
+**Причина:** `-lookup-paths 1` (не включён multipath).
+**Решение:** использовать `demo_eclipse.sh` с параметром `paths=3`.
+```bash
+./scripts/demo_eclipse.sh 11 3 30 5
+```

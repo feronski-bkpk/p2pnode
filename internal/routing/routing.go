@@ -2,6 +2,7 @@ package routing
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"sync"
 )
@@ -63,6 +64,8 @@ func bucketIndex(self, other ID) int {
 	return -1
 }
 
+const SubnetDiversityLimit = 2
+
 func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 	if err := c.Validate(); err != nil {
 		return false
@@ -80,6 +83,26 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 
 	b := rt.buckets[idx]
 	c.Touch()
+
+	if c.NodeID != rt.self {
+		newSubnet := subnetOfContact(c)
+		if newSubnet != "" {
+			sameSubnet := 0
+			for _, existing := range b.contacts {
+				if subnetOfContact(existing) == newSubnet {
+					sameSubnet++
+				}
+			}
+			if sameSubnet >= SubnetDiversityLimit {
+				if b.find(c.NodeID) < 0 {
+					if rt.observer != nil {
+						rt.observer.ContactRemoved(c.NodeID, c.Addr(), "subnet_diversity")
+					}
+					return false
+				}
+			}
+		}
+	}
 
 	if existing := b.find(c.NodeID); existing >= 0 {
 		old := b.contacts[existing]
@@ -126,6 +149,41 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 		rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
 	}
 	return true
+}
+
+func subnetOfContact(c Contact) string {
+	host := c.Host
+	if host == "" {
+		return ""
+	}
+
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return ""
+	}
+
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() {
+			return ""
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			return ip.String() + "/64"
+		}
+		return net.IPv4(ip4[0], ip4[1], ip4[2], 0).String() + "/24"
+	}
+
+	var n int
+	if _, err := fmt.Sscanf(host, "node-%02d", &n); err == nil && n > 0 {
+		zone := (n-1)/3 + 1
+		return fmt.Sprintf("zone-%d/24", zone)
+	}
+
+	if len(host) >= 6 && host[:6] == "sybil-" {
+		return "zone-sybil/24"
+	}
+
+	return ""
 }
 
 func (rt *RoutingTable) Remove(id ID) bool {

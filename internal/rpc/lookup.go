@@ -1,6 +1,8 @@
 package rpc
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -45,6 +47,17 @@ type LookupIteration struct {
 type ContactLog struct {
 	NodeID string `json:"node_id"`
 	Addr   string `json:"addr"`
+}
+
+type MultiPathResult struct {
+	Target       routing.ID
+	Paths        []LookupResult
+	PathCount    int
+	Agreement    int
+	Winner       string
+	WinnerNodeID routing.ID
+	Disagree     bool
+	Duration     time.Duration
 }
 
 func (c *Client) LookupNode(
@@ -197,6 +210,130 @@ func (c *Client) LookupNode(
 	})
 
 	return result
+}
+
+func (c *Client) LookupNodeMultiPath(
+	local routing.Contact,
+	seeds []routing.Contact,
+	target routing.ID,
+	paths int,
+	cfg LookupConfig,
+	pingFn func(seed routing.Contact) (*routing.RoutingTable, error),
+) MultiPathResult {
+	start := time.Now()
+
+	if paths <= 0 {
+		paths = 1
+	}
+	if paths > len(seeds) {
+		paths = len(seeds)
+	}
+
+	result := MultiPathResult{
+		Target:    target,
+		PathCount: paths,
+	}
+
+	c.ev.Log("multipath_start", map[string]any{
+		"target": target.Short(),
+		"paths":  paths,
+	})
+
+	type pathReply struct {
+		idx  int
+		res  LookupResult
+		err  error
+		addr string
+	}
+	ch := make(chan pathReply, paths)
+	var wg sync.WaitGroup
+
+	for i := 0; i < paths; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			seed := seeds[idx]
+
+			tbl, err := pingFn(seed)
+			if err != nil {
+				ch <- pathReply{idx: idx, err: err}
+				return
+			}
+
+			res := c.LookupNode(local, tbl, target, cfg)
+
+			addr := ""
+			for _, ct := range res.Contacts {
+				if ct.NodeID == target {
+					addr = ct.Addr()
+					break
+				}
+			}
+			ch <- pathReply{idx: idx, res: res, addr: addr}
+		}(i)
+	}
+	wg.Wait()
+	close(ch)
+
+	addrVotes := map[string]int{}
+	for r := range ch {
+		if r.err != nil {
+			c.ev.Log("multipath_path_error", map[string]any{
+				"idx": r.idx,
+				"err": r.err.Error(),
+			})
+			continue
+		}
+		result.Paths = append(result.Paths, r.res)
+		if r.addr != "" {
+			addrVotes[r.addr]++
+		}
+	}
+
+	bestVotes := 0
+	bestAddr := ""
+	for addr, votes := range addrVotes {
+		if votes > bestVotes {
+			bestVotes = votes
+			bestAddr = addr
+		}
+	}
+
+	result.Agreement = bestVotes
+	result.Winner = bestAddr
+	result.Duration = time.Since(start)
+
+	if bestAddr == "" {
+		result.Disagree = true
+	} else if bestVotes < (paths+1)/2 {
+		result.Disagree = true
+	}
+
+	c.ev.Log("multipath_done", map[string]any{
+		"target":      target.Short(),
+		"paths":       result.PathCount,
+		"winner":      bestAddr,
+		"agreement":   result.Agreement,
+		"disagree":    result.Disagree,
+		"duration_ms": result.Duration.Milliseconds(),
+		"addr_votes":  addrVotes,
+	})
+
+	return result
+}
+
+func ExtractTargetAddr(res LookupResult) string {
+	for _, ct := range res.Contacts {
+		if ct.NodeID == res.Target {
+			return ct.Addr()
+		}
+	}
+	return ""
+}
+
+func HashAddr(addr string) string {
+	h := sha256.Sum256([]byte(addr))
+	return fmt.Sprintf("%x", h[:4])
 }
 
 func uniqueSorted(nodes []routing.Contact, target routing.ID, n int) []routing.Contact {

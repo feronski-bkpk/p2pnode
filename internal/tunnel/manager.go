@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"p2pnode/internal/filetransfer"
 )
 
 type Manager struct {
@@ -121,6 +123,10 @@ type TunnelManager struct {
 	buildsFail   uint64
 	rebuildsOK   uint64
 	rebuildsFail uint64
+
+	fileStore  *filetransfer.Store
+	fileOutDir string
+	handlers   *HandlerConfig
 }
 
 func NewTunnelManager(
@@ -163,6 +169,12 @@ func (m *TunnelManager) SetOnMessage(cb func(Message)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onMessage = cb
+}
+
+func (m *TunnelManager) SetHandlers(hc *HandlerConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.handlers = hc
 }
 
 func (m *TunnelManager) Build(destID [32]byte) (*Session, error) {
@@ -260,6 +272,7 @@ func (m *TunnelManager) buildInternal(destID [32]byte, exclude [][32]byte) (*Ses
 	sess.SetOnClosed(func(s *Session) {
 		m.removeSession(s)
 	})
+	sess.SetFileCallbacks(m.OnFileHeader, m.OnFileChunk)
 	sess.Start()
 
 	m.mu.Lock()
@@ -505,6 +518,7 @@ type ManagerStats struct {
 	RebuildsOK   uint64 `json:"rebuilds_ok"`
 	RebuildsFail uint64 `json:"rebuilds_fail"`
 	Messages     int    `json:"messages"`
+	SelectMode   string `json:"select_mode"`
 }
 
 func (m *TunnelManager) Stats() ManagerStats {
@@ -512,6 +526,11 @@ func (m *TunnelManager) Stats() ManagerStats {
 	sessions := len(m.sessions)
 	pools := len(m.pools)
 	m.mu.RUnlock()
+
+	mode := "ranked"
+	if m.RouteBuilder != nil {
+		mode = string(m.RouteBuilder.SelectMode)
+	}
 
 	m.statsMu.Lock()
 	defer m.statsMu.Unlock()
@@ -523,6 +542,7 @@ func (m *TunnelManager) Stats() ManagerStats {
 		RebuildsOK:   m.rebuildsOK,
 		RebuildsFail: m.rebuildsFail,
 		Messages:     m.Messages.Count(),
+		SelectMode:   mode,
 	}
 }
 
@@ -619,4 +639,134 @@ func (m *TunnelManager) expireSessions() {
 			m.pools[destID] = alive
 		}
 	}
+}
+
+func (m *TunnelManager) StartFileReceiver(ctx context.Context, dir string) error {
+	m.fileStore = filetransfer.NewStore()
+	m.fileOutDir = dir
+
+	if m.handlers != nil {
+		m.handlers.OnFileHeader = m.OnFileHeader
+		m.handlers.OnFileChunk = m.OnFileChunk
+	}
+
+	go m.startFileExpireLoop(ctx)
+	m.Log.Info("tunnel: file receiver started", "dir", dir)
+	return nil
+}
+
+func (m *TunnelManager) startFileExpireLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if m.fileStore == nil {
+				continue
+			}
+			n := m.fileStore.Expire()
+			if n > 0 {
+				m.Log.Info("tunnel: expired file transfers", "count", n)
+			}
+		}
+	}
+}
+
+func (m *TunnelManager) OnFileHeader(h *filetransfer.Header) {
+	if m.fileStore == nil {
+		m.Log.Warn("tunnel: file header but no receiver",
+			"file_id", h.FileID.Short())
+		return
+	}
+	m.fileStore.Init(h)
+	m.Log.Info("tunnel: file header received",
+		"file_id", h.FileID.Short(),
+		"name", h.Name,
+		"size", h.TotalSize,
+		"chunks", h.TotalChunks)
+}
+
+func (m *TunnelManager) OnFileChunk(c filetransfer.Chunk) {
+	if m.fileStore == nil {
+		return
+	}
+	added := m.fileStore.AddChunk(c)
+	if !added {
+		m.Log.Debug("tunnel: duplicate file chunk ignored",
+			"file_id", c.FileID.Short(),
+			"idx", c.ChunkIndex)
+		return
+	}
+	m.Log.Debug("tunnel: file chunk added",
+		"file_id", c.FileID.Short(),
+		"idx", c.ChunkIndex,
+		"size", len(c.Data))
+
+	done := m.fileStore.Complete(c.FileID)
+	if done == nil {
+		return
+	}
+	go m.finalizeFile(done)
+}
+
+func (m *TunnelManager) finalizeFile(t *filetransfer.InProgressTransfer) {
+	outDir := m.fileOutDir
+	if outDir == "" {
+		outDir = "."
+	}
+
+	chunkCh := make(chan filetransfer.Chunk, len(t.Chunks))
+	for i := uint32(0); i < t.Header.TotalChunks; i++ {
+		chunkCh <- t.Chunks[i]
+	}
+	close(chunkCh)
+
+	outPath := outDir + "/" + t.Header.Name
+	sha, err := filetransfer.Reassemble(t.Header, chunkCh, outPath)
+	if err != nil {
+		m.Log.Error("tunnel: reassemble file",
+			"file_id", t.Header.FileID.Short(),
+			"name", t.Header.Name,
+			"err", err)
+		return
+	}
+	m.Log.Info("tunnel: file received",
+		"file_id", t.Header.FileID.Short(),
+		"path", outPath,
+		"sha256", sha,
+		"size", t.Header.TotalSize)
+}
+
+func (m *TunnelManager) SendFile(
+	ctx context.Context,
+	destID [32]byte,
+	path string,
+	chunkSize uint32,
+) (*filetransfer.Header, filetransfer.Progress, error) {
+	adapter := &sessionSenderAdapter{mgr: m, destID: destID}
+	return filetransfer.SendFile(ctx, adapter, destID, path, chunkSize, m.Log)
+}
+
+type sessionSenderAdapter struct {
+	mgr    *TunnelManager
+	destID [32]byte
+}
+
+func (a *sessionSenderAdapter) SendChunk(
+	ctx context.Context,
+	destID [32]byte,
+	envelope []byte,
+) error {
+	sess, err := a.mgr.pickSession(destID, 0)
+	if err != nil {
+		return fmt.Errorf("tunnel: pick session: %w", err)
+	}
+
+	msgID, err := NewMessageID()
+	if err != nil {
+		return err
+	}
+	return sess.SendBytesWithID(msgID, envelope, a.mgr.AckTimeout)
 }

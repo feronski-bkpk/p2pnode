@@ -25,6 +25,16 @@ func (n *Node) initTunnel() error {
 		n.profileStore,
 	)
 	rb.Log = n.Log
+	switch n.Config.RelaySelectMode {
+	case "random":
+		rb.SelectMode = tunnel.SelectRandom
+	case "subnet":
+		rb.SelectMode = tunnel.SelectSubnet
+	default:
+		rb.SelectMode = tunnel.SelectRanked
+	}
+	n.Log.Info("node: relay selection mode",
+		"mode", string(rb.SelectMode))
 
 	n.tunnelMgr = tunnel.NewTunnelManager(
 		n.Identity.NodeID,
@@ -52,6 +62,8 @@ func (n *Node) initTunnel() error {
 		DestSessions: tunnel.NewDestSessionStore(),
 		Trace:        n.tunnelMgr.Trace,
 	}
+
+	n.tunnelMgr.SetHandlers(n.tunnelHandlers)
 
 	n.tunnelMgr.SetOnMessage(func(msg tunnel.Message) {
 		n.Log.Info("node: incoming message",

@@ -66,6 +66,18 @@ type Config struct {
 
 	ExitAfterMs int `yaml:"exit_after_ms"`
 
+	SendFile      string `yaml:"send_file"`
+	RecvFileDir   string `yaml:"recv_file_dir"`
+	FileChunkSize int    `yaml:"file_chunk_size"`
+	FileMaxSize   int64  `yaml:"file_max_size"`
+
+	RelaySelectMode string `yaml:"relay_select_mode"`
+
+	LookupPaths int `yaml:"lookup_paths"`
+
+	SybilMode   bool   `yaml:"sybil_mode"`
+	SybilVictim string `yaml:"sybil_victim"`
+
 	source string
 }
 
@@ -109,7 +121,20 @@ func Default() Config {
 		SendTo:             "",
 		SendText:           "",
 		ExitAfterMs:        5000,
-		source:             "defaults",
+
+		SendFile:      "",
+		RecvFileDir:   "",
+		FileChunkSize: 32768,
+		FileMaxSize:   104857600,
+
+		RelaySelectMode: "ranked",
+
+		LookupPaths: 1,
+
+		SybilMode:   false,
+		SybilVictim: "",
+
+		source: "defaults",
 	}
 }
 
@@ -150,6 +175,17 @@ type yamlConfig struct {
 
 	SendTo   string `yaml:"send_to"`
 	SendText string `yaml:"send_text"`
+
+	SendFile      string `yaml:"send_file"`
+	RecvFileDir   string `yaml:"recv_file_dir"`
+	FileChunkSize int    `yaml:"file_chunk_size"`
+	FileMaxSize   int64  `yaml:"file_max_size"`
+
+	RelaySelectMode string `yaml:"relay_select_mode"`
+	LookupPaths     int    `yaml:"lookup_paths"`
+
+	SybilMode   bool   `yaml:"sybil_mode"`
+	SybilVictim string `yaml:"sybil_victim"`
 }
 
 func (c *Config) LoadFromFile(path string) error {
@@ -261,6 +297,28 @@ func (c *Config) LoadFromFile(path string) error {
 	if y.ExitAfterMs != 0 {
 		c.ExitAfterMs = y.ExitAfterMs
 	}
+	if y.SendFile != "" {
+		c.SendFile = y.SendFile
+	}
+	if y.RecvFileDir != "" {
+		c.RecvFileDir = y.RecvFileDir
+	}
+	if y.FileChunkSize != 0 {
+		c.FileChunkSize = y.FileChunkSize
+	}
+	if y.FileMaxSize != 0 {
+		c.FileMaxSize = y.FileMaxSize
+	}
+	if y.RelaySelectMode != "" {
+		c.RelaySelectMode = y.RelaySelectMode
+	}
+	if y.LookupPaths != 0 {
+		c.LookupPaths = y.LookupPaths
+	}
+	c.SybilMode = y.SybilMode
+	if y.SybilVictim != "" {
+		c.SybilVictim = strings.ToLower(y.SybilVictim)
+	}
 
 	c.source = path
 	return nil
@@ -320,6 +378,30 @@ func Load(args []string) (Config, error) {
 
 		sendTo   = fs.String("send-to", envStr("SEND_TO", cfg.SendTo), "hex NodeID получателя")
 		sendText = fs.String("send-text", envStr("SEND_TEXT", cfg.SendText), "текст прикладного сообщения")
+
+		sendFile = fs.String("send-file", envStr("SEND_FILE", cfg.SendFile),
+			"путь к файлу для отправки через туннель")
+		recvFileDir = fs.String("recv-file-dir", envStr("RECV_FILE_DIR", cfg.RecvFileDir),
+			"каталог для приёма файлов")
+		fileChunkSize = fs.Int("file-chunk-size", envInt("FILE_CHUNK_SIZE", cfg.FileChunkSize),
+			"размер чанка в байтах (default 32 КиБ)")
+		fileMaxSize = fs.Int64("file-max-size", envInt64("FILE_MAX_SIZE", cfg.FileMaxSize),
+			"максимальный размер файла (default 100 МиБ)")
+
+		relaySelectMode = fs.String("relay-select-mode",
+			envStr("RELAY_SELECT_MODE", cfg.RelaySelectMode),
+			"ranked|random|subnet (E7-7)")
+
+		lookupPaths = fs.Int("lookup-paths",
+			envInt("LOOKUP_PATHS", cfg.LookupPaths),
+			"число независимых lookup-путей (E7-8, default 1)")
+
+		sybilMode = fs.Bool("sybil-mode",
+			envBool("SYBIL_MODE", cfg.SybilMode),
+			"E7-8: Sybil-режим (атака на victim)")
+		sybilVictim = fs.String("sybil-victim",
+			envStr("SYBIL_VICTIM", cfg.SybilVictim),
+			"E7-8: hex NodeID victim'а (64 символа)")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -362,6 +444,19 @@ func Load(args []string) (Config, error) {
 	cfg.SendTo = *sendTo
 	cfg.SendText = *sendText
 	cfg.ExitAfterMs = *exitAfterMs
+
+	cfg.SendFile = *sendFile
+	cfg.RecvFileDir = *recvFileDir
+	cfg.FileChunkSize = *fileChunkSize
+	cfg.FileMaxSize = *fileMaxSize
+
+	cfg.RelaySelectMode = *relaySelectMode
+	cfg.LookupPaths = *lookupPaths
+
+	cfg.SybilMode = *sybilMode
+	if *sybilVictim != "" {
+		cfg.SybilVictim = strings.ToLower(*sybilVictim)
+	}
 
 	if *bootstrap != "" {
 		cfg.BootstrapPeers = nil
@@ -424,6 +519,35 @@ func (c Config) Validate() error {
 	if c.SendIntervalMs < 0 {
 		return fmt.Errorf("config: send_interval_ms must be >= 0, got %d", c.SendIntervalMs)
 	}
+	if c.FileChunkSize < 1 {
+		return fmt.Errorf("config: file_chunk_size must be >= 1, got %d", c.FileChunkSize)
+	}
+	if c.FileChunkSize > 1024*1024 {
+		return fmt.Errorf("config: file_chunk_size must be <= 1 MiB, got %d", c.FileChunkSize)
+	}
+	if c.FileMaxSize < 1 {
+		return fmt.Errorf("config: file_max_size must be >= 1, got %d", c.FileMaxSize)
+	}
+	switch c.RelaySelectMode {
+	case "", "ranked", "random", "subnet":
+	default:
+		return fmt.Errorf("config: invalid relay_select_mode: %s", c.RelaySelectMode)
+	}
+	if c.LookupPaths < 1 {
+		return fmt.Errorf("config: lookup_paths must be >= 1, got %d", c.LookupPaths)
+	}
+	if c.LookupPaths > 8 {
+		return fmt.Errorf("config: lookup_paths must be <= 8, got %d", c.LookupPaths)
+	}
+	if c.SybilMode {
+		if c.SybilVictim == "" {
+			return fmt.Errorf("config: sybil_mode requires sybil_victim")
+		}
+		if len(c.SybilVictim) != 64 {
+			return fmt.Errorf("config: sybil_victim must be 64 hex chars, got %d",
+				len(c.SybilVictim))
+		}
+	}
 	return nil
 }
 
@@ -461,6 +585,15 @@ func envBool(key string, def bool) bool {
 	if v := os.Getenv(key); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			return b
+		}
+	}
+	return def
+}
+
+func envInt64(key string, def int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
 		}
 	}
 	return def

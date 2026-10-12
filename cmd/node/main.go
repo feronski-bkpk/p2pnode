@@ -45,7 +45,9 @@ func main() {
 		"state_dir", cfg.NodeStateDir,
 		"k", cfg.KBucketSize,
 		"alpha", cfg.Alpha,
-		"no_serve", cfg.NoServe)
+		"no_serve", cfg.NoServe,
+		"lookup_paths", cfg.LookupPaths,
+		"relay_select_mode", cfg.RelaySelectMode)
 
 	n.OnMessage(func(msg tunnel.Message) {
 		log.Info("message received",
@@ -103,6 +105,18 @@ func main() {
 	if cfg.SendTo != "" {
 		if err := sendMessage(cfg, n, log); err != nil {
 			log.Error("send message", "err", err)
+		}
+	}
+
+	if cfg.RecvFileDir != "" {
+		if err := n.StartFileReceiver(context.Background(), cfg.RecvFileDir); err != nil {
+			log.Error("start file receiver", "err", err)
+		}
+	}
+
+	if cfg.SendFile != "" {
+		if err := sendFileCmd(cfg, n, log); err != nil {
+			log.Error("send file", "err", err)
 		}
 	}
 
@@ -245,7 +259,8 @@ func sendMessage(cfg config.Config, n *node.Node, log *slog.Logger) error {
 			"builds_fail", st.BuildsFail,
 			"rebuilds_ok", st.RebuildsOK,
 			"rebuilds_fail", st.RebuildsFail,
-			"messages", st.Messages)
+			"messages", st.Messages,
+			"select_mode", st.SelectMode)
 
 		if i < repeat-1 && interval > 0 {
 			log.Info("send: sleeping between iterations",
@@ -271,6 +286,51 @@ func sendMessage(cfg config.Config, n *node.Node, log *slog.Logger) error {
 				"delivered", m.Delivered)
 		}
 	}
+
+	return nil
+}
+
+func sendFileCmd(cfg config.Config, n *node.Node, log *slog.Logger) error {
+	if cfg.SendTo == "" {
+		return fmt.Errorf("send-file: -send-to не задан")
+	}
+
+	destBytes, err := hex.DecodeString(strings.TrimSpace(cfg.SendTo))
+	if err != nil {
+		return fmt.Errorf("send-to: hex decode: %w", err)
+	}
+	if len(destBytes) != 32 {
+		return fmt.Errorf("send-to: want 32 bytes, got %d", len(destBytes))
+	}
+	var destID [32]byte
+	copy(destID[:], destBytes)
+
+	log.Info("send-file: starting",
+		"dest", fmt.Sprintf("%x", destID[:4]),
+		"path", cfg.SendFile,
+		"chunk_size", cfg.FileChunkSize)
+
+	if cfg.TunnelPoolSize > 1 {
+		if err := n.BuildTunnelPool(destID); err != nil {
+			log.Warn("send-file: pool build failed", "err", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	hdr, progress, err := n.SendFile(ctx, destID, cfg.SendFile, uint32(cfg.FileChunkSize))
+	if err != nil {
+		return fmt.Errorf("send-file: %w", err)
+	}
+
+	log.Info("send-file: done",
+		"file_id", hdr.FileID.Short(),
+		"name", hdr.Name,
+		"size", hdr.TotalSize,
+		"acked", progress.AckedChunks,
+		"total", progress.TotalChunks,
+		"sha256", fmt.Sprintf("%x", hdr.SHA256))
 
 	return nil
 }
@@ -304,28 +364,55 @@ func exportMetrics(cfg config.Config, n *node.Node, log *slog.Logger) error {
 		_, presentBefore := n.Table.Get(targetID)
 		log.Info("lookup",
 			"target", targetID.String(),
-			"present_before", presentBefore)
+			"present_before", presentBefore,
+			"paths", cfg.LookupPaths)
 
-		res := n.Client.LookupNode(
-			n.Local,
-			n.Table,
-			targetID,
-			rpc.LookupConfig{
-				Alpha:   cfg.Alpha,
-				K:       cfg.KBucketSize,
-				Timeout: cfg.PingTimeout,
-			},
-		)
-		path, err := exp.ExportLookupWithTimestamp(res, !presentBefore)
-		if err != nil {
-			log.Error("ExportLookup", "err", err)
+		if cfg.LookupPaths > 1 {
+			mpRes, err := n.LookupNodeMultiPath(targetID)
+			if err != nil {
+				log.Error("multipath lookup", "err", err)
+				return err
+			}
+			log.Info("multipath: done",
+				"paths", mpRes.PathCount,
+				"agreement", mpRes.Agreement,
+				"winner", mpRes.Winner,
+				"disagree", mpRes.Disagree,
+				"duration_ms", mpRes.Duration.Milliseconds())
+
+			if len(mpRes.Paths) > 0 {
+				path, err := exp.ExportLookupWithTimestamp(mpRes.Paths[0], !presentBefore)
+				if err != nil {
+					log.Error("ExportLookup", "err", err)
+				} else {
+					log.Info("multipath: exported",
+						"path", path,
+						"winner", mpRes.Winner,
+						"agreement", mpRes.Agreement)
+				}
+			}
 		} else {
-			log.Info("lookup exported",
-				"path", path,
-				"rpc", res.RPC,
-				"iterations", res.Iterations,
-				"timeouts", res.Timeouts,
-				"duration_ms", res.Duration.Milliseconds())
+			res := n.Client.LookupNode(
+				n.Local,
+				n.Table,
+				targetID,
+				rpc.LookupConfig{
+					Alpha:   cfg.Alpha,
+					K:       cfg.KBucketSize,
+					Timeout: cfg.PingTimeout,
+				},
+			)
+			path, err := exp.ExportLookupWithTimestamp(res, !presentBefore)
+			if err != nil {
+				log.Error("ExportLookup", "err", err)
+			} else {
+				log.Info("lookup exported",
+					"path", path,
+					"rpc", res.RPC,
+					"iterations", res.Iterations,
+					"timeouts", res.Timeouts,
+					"duration_ms", res.Duration.Milliseconds())
+			}
 		}
 	}
 	return nil
@@ -364,7 +451,7 @@ func newLogger(level string) *slog.Logger {
 }
 
 func publishRecords(cfg config.Config, n *node.Node, log *slog.Logger) error {
-	addr := n.Listener.Addr()
+	addr := n.Local.Addr()
 
 	rec, err := record.New(n.Identity.PrivateKey, []string{addr}, node.DefaultRecordTTL, 1)
 	if err != nil {

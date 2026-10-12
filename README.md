@@ -17,15 +17,18 @@
 | 4 | Собственный AKE (Ed25519 + X25519 + HKDF + ChaCha20-Poly1305), anti-replay |
 | 5 | Туннели через ретрансляторы: E2E-шифрование, build-ACK, TTL, восстановление, пул |
 | 6 | Docker Compose, 4 bootstrap-схемы (star/ring/tree/multiseed), N=15–21, сценарии отказа |
-| 7 | Метрики, статистика, графики |
+| 7 | Передача файлов, ограниченный underlay, tc/netem, профиль ретранслятора, Eclipse/Sybil защита |
 
 ## Требования
 
 - **Go** 1.26 или новее.
-- **Python 3** — для скриптов анализа и генерации отчёта.
+- **Python 3** — для скриптов анализа, генерации отчёта, Sybil-identity.
+  - **Python-пакет** `cryptography` — для E7-8 (`pip install cryptography`).
 - **Docker** ≥ 20.10 + `docker compose` v2.
 - **Graphviz** (опционально) — для визуализации графов.
 - **bash**, `sha256sum`, `mktemp` — стандартные утилиты Linux.
+- **`nsenter`** (util-linux) — для `tc`/`nft` внутри контейнеров.
+- **`sudo`** — для применения `tc`/`nft` через `nsenter`.
 - **tcpdump** (опционально) — для демонстрации E2E-защиты.
 
 **Go-зависимости** (устанавливаются автоматически):
@@ -38,6 +41,7 @@
 
 ```bash
 go mod download
+pip install cryptography
 ```
 
 ## Быстрый старт
@@ -58,9 +62,6 @@ go run ./cmd/node \
     -listen-port 9001 \
     -log-level INFO
 ```
-
-Узел сгенерирует Ed25519-ключи в `state-dir`, поднимет TCP-слушатель
-и будет ждать входящих соединений.
 
 ### Запуск второго узла с bootstrap
 
@@ -113,16 +114,12 @@ sleep 20
 
 ### 3. Защищённый канал
 
-Все RPC идут через handshake + AEAD. Отдельная демонстрация:
-
 ```bash
-# Терминал 1: seed
-./bin/node -listen-port 9500 -state-dir /tmp/n1 -log-level DEBUG
-
-# Терминал 2: клиент
-./bin/node -listen-port 9501 -state-dir /tmp/n2 \
-    -bootstrap 127.0.0.1:9500 -log-level DEBUG
+./scripts/demo_secure_channel.sh
 ```
+
+Все RPC идут через handshake + AEAD. Трафик зашифрован
+ChaCha20-Poly1305.
 
 ### 4. Туннели через ретрансляторы
 
@@ -138,16 +135,9 @@ sleep 20
 ### 5. Docker: 4 bootstrap-схемы
 
 ```bash
-# star
 ./scripts/docker_up.sh 15 star
-
-# ring
 ./scripts/docker_up.sh 15 ring
-
-# tree
 ./scripts/docker_up.sh 15 tree
-
-# multiseed (3 seed'а)
 ./scripts/docker_up.sh 15 multiseed
 
 # Полное сравнение всех 4
@@ -172,7 +162,86 @@ sleep 20
 ./scripts/run_experiment_n21.sh 21 40
 ```
 
-### 8. HTML-отчёт с графами
+### 8. Передача файла через туннель
+
+```bash
+# N=5 узлов, max-hops=2, файл 1 МБ
+./scripts/demo_file_transfer.sh 5 1 2
+
+# N=7 узлов, max-hops=3, файл 10 МБ
+./scripts/demo_file_transfer.sh 7 10 3
+```
+
+**Что проверяется:** разбиение на чанки, ACK на каждый чанк,
+SHA-256 всего файла, дедупликация. **Артефакт:** `visualization/file-transfer/`.
+
+### 9. Ограниченный underlay (nftables)
+
+```bash
+./scripts/demo_underlay.sh 7 star
+```
+
+**Что проверяется:** IP-достижимость между узлами ограничена
+nftables-правилами. Пара «bootstrap-связь» → OK, «не bootstrap» →
+BLOCKED.
+
+**Артефакт:** `visualization/underlay/` (`summary.json`, `rules.json`,
+`lookups/`).
+
+### 10. Управляемая деградация (tc/netem)
+
+```bash
+# Отдельные режимы (рекомендуется)
+./scripts/demo_netem.sh baseline 5
+./scripts/demo_netem.sh delay-50 5
+./scripts/demo_netem.sh loss-5 5
+./scripts/demo_netem.sh stress 5
+
+# Все 4 режима подряд
+./scripts/demo_netem.sh all 7
+
+# Сводная таблица
+./scripts/demo_netem.sh summary
+```
+
+**Что проверяется:** влияние delay/loss на lookup latency, success
+rate, file goodput.
+
+**Артефакт:** `visualization/netem/` (`baseline/`, `delay-50/`,
+`loss-5/`, `stress/`, `summary.json`).
+
+### 11. Профиль ретранслятора
+
+```bash
+./scripts/demo_relay_selection.sh 9 10
+```
+
+**Что проверяется:** 3 режима выбора ретранслятора —
+`ranked` (EMA-score), `random`, `subnet` (ranked + subnet-diversity).
+Сравниваются `unique_subnets`, `subnet_diversity_rejects`, `duration_ms`.
+
+**Артефакт:** `visualization/relay-selection/` (`ranked/`, `random/`,
+`subnet/`, `summary.json`).
+
+### 12. Eclipse/Sybil защита
+
+```bash
+# N=11 честных + 5 Sybil'ов, 30 lookup'ов, 3 пути
+./scripts/demo_eclipse.sh 11 3 30 5
+```
+
+**Что проверяется:** 5 Sybil-узлов с NodeID, близким к victim'у
+(префикс совпадает), атакуют lookup. Single lookup компрометирован,
+multi-path — устойчив.
+
+**Ожидаемый результат:**
+- `single` — **0/30** (атака успешна).
+- `multipath` — **30/30** (контрмера работает).
+
+**Артефакт:** `visualization/eclipse/` (`single/`, `multipath/`,
+`summary.json`).
+
+### 13. HTML-отчёт с графами
 
 ```bash
 ./scripts/generate_report.sh
@@ -199,6 +268,7 @@ p2pnode/
 │   ├── PROTOCOL.md                 ← протокол и алгоритмы
 │   ├── TUNNEL.md                   ← туннели через ретрансляторы
 │   ├── DEPLOY.md                   ← Docker-развёртывание
+│   ├── EXPERIMENTS.md              ← план экспериментов
 │   └── VISUALIZATION.md            ← Graphviz, HTML-отчёт
 ├── cmd/
 │   └── node/main.go                ← точка входа
@@ -206,6 +276,7 @@ p2pnode/
 │   ├── config/                     ← конфигурация (CLI + env + YAML)
 │   ├── crypto/                     ← AKE, AEAD, anti-replay
 │   ├── events/                     ← event stream (JSONL)
+│   ├── filetransfer/               ← передача файлов
 │   ├── identity/                   ← Ed25519, NodeID
 │   ├── integration/                ← интеграционные тесты
 │   ├── metrics/                    ← экспорт метрик
@@ -213,7 +284,7 @@ p2pnode/
 │   ├── protocol/                   ← формат кадра, типы сообщений
 │   ├── record/                     ← подписанные NodeRecord
 │   ├── routing/                    ← XOR-метрика, k-buckets
-│   ├── rpc/                        ← RPC (PING, FIND_NODE, STORE, FIND_VALUE, handshake, TunnelHandler)
+│   ├── rpc/                        ← RPC (PING, FIND_NODE, STORE, FIND_VALUE, handshake, TunnelHandler, LookupNodeMultiPath)
 │   ├── store/                      ← локальное хранилище DHT
 │   ├── transport/
 │   │   ├── transport.go            ← интерфейсы Conn/Listener/Transport
@@ -221,14 +292,17 @@ p2pnode/
 │   └── tunnel/                     ← туннели через ретрансляторы
 ├── scripts/
 │   ├── common.sh                   ← общие переменные
+│   │
+│   ├── ── Этап 1–5: базовое ──
 │   ├── run_star.sh                 ← star-стенд (локально)
 │   ├── run_ring.sh                 ← ring-стенд (локально)
 │   ├── run_experiment.sh           ← полный эксперимент (локально)
 │   ├── demo_store.sh               ← STORE / FIND_VALUE
 │   ├── demo_tunnel.sh              ← туннельная доставка
-│   ├── demo_tunnel_recovery.sh     ← восстановление (E5-6)
-│   ├── demo_tunnel_pcap.sh         ← E2E-защита через pcap (E5-4)
-│   ├── demo_tunnel_pool.sh         ← пул из 3 туннелей (E5-8)
+│   ├── demo_tunnel_recovery.sh     ← восстановление
+│   ├── demo_tunnel_pcap.sh         ← E2E-защита через pcap
+│   ├── demo_tunnel_pool.sh         ← пул из 3 туннелей
+│   ├── demo_secure_channel.sh      ← защищённый канал
 │   ├── check_ne_degenerate.sh      ← проверка невырожденности
 │   ├── compare_bootstrap.sh        ← star vs ring
 │   ├── compare_serialization.sh    ← msgpack vs JSON vs gob
@@ -240,6 +314,7 @@ p2pnode/
 │   ├── capture_and_verify.sh       ← pcap + проверка шифрования
 │   ├── stop_all.sh                 ← остановка локального стенда
 │   │
+│   ├── ── Этап 6: Docker ──
 │   ├── docker_gen_compose.sh       ← генератор docker-compose.yml
 │   ├── docker_up.sh                ← запуск N узлов
 │   ├── docker_down.sh              ← остановка + очистка
@@ -250,7 +325,20 @@ p2pnode/
 │   ├── demo_seed_down.sh           ← работа без seed'а
 │   ├── demo_failures.sh            ← 3 сценария отказа
 │   ├── compare_4schemes_docker.sh  ← сравнение 4 схем
-│   └── run_experiment_n21.sh       ← N=21
+│   ├── run_experiment_n21.sh       ← N=21
+│   │
+│   ├── ── Этап 7: расширения ──
+│   ├── demo_file_transfer.sh       ← передача файлов
+│   ├── gen_underlay_rules.sh       ← генерация nftables-правил
+│   ├── apply_underlay.sh           ← применение underlay
+│   ├── clear_underlay.sh           ← снятие underlay
+│   ├── demo_underlay.sh            ← ограниченный underlay
+│   ├── apply_netem.sh              ← применение tc/netem
+│   ├── clear_netem.sh              ← снятие tc/netem
+│   ├── demo_netem.sh               ← управляемая деградация
+│   ├── demo_relay_selection.sh     ← выбор ретранслятора
+│   ├── gen_sybil_identity.sh       ← генерация Sybil-identity
+│   └── demo_eclipse.sh             ← Eclipse/Sybil защита
 ├── deploy/
 │   └── configs/                    ← примеры YAML-конфигов
 └── go.mod / go.sum
@@ -291,15 +379,44 @@ p2pnode/
 | Получатель | `-send-to` | `SEND_TO` | — |
 | Текст | `-send-text` | `SEND_TEXT` | — |
 
+### Параметры передача файлов
+
+| Параметр | CLI | Env | Default |
+|----------|-----|-----|---------|
+| Файл для отправки | `-send-file` | `SEND_FILE` | — |
+| Каталог для приёма | `-recv-file-dir` | `RECV_FILE_DIR` | — |
+| Размер чанка | `-file-chunk-size` | `FILE_CHUNK_SIZE` | `32768` |
+| Макс. размер файла | `-file-max-size` | `FILE_MAX_SIZE` | `104857600` |
+
+### Параметры выбор ретранслятора
+
+| Параметр | CLI | Env | Default |
+|----------|-----|-----|---------|
+| Режим выбора | `-relay-select-mode` | `RELAY_SELECT_MODE` | `ranked` |
+
+Значения: `ranked` | `random` | `subnet`.
+
+### Параметры Eclipse/Sybil
+
+| Параметр | CLI | Env | Default |
+|----------|-----|-----|---------|
+| Число lookup-путей | `-lookup-paths` | `LOOKUP_PATHS` | `1` |
+| Sybil-режим | `-sybil-mode` | `SYBIL_MODE` | `false` |
+| Victim NodeID | `-sybil-victim` | `SYBIL_VICTIM` | — |
+
 ## Документация
 
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — слои, модули,
-  инженерные решения (TCP, msgpack, Ed25519, Kademlia, AKE, туннели),
-  модель угроз, границы.
+  инженерные решения (TCP, msgpack, Ed25519, Kademlia, AKE, туннели,
+  Docker, file-transfer), модель угроз, границы.
 - **[PROTOCOL.md](docs/PROTOCOL.md)** — формат кадра, типы сообщений,
-  payload'ы, алгоритмы lookup / STORE / handshake / туннелей.
-- **[TUNNEL.md](docs/TUNNEL.md)** — туннели через ретрансляторы.
+  payload'ы, алгоритмы lookup / STORE / handshake / туннелей /
+  file-transfer / multipath lookup.
+- **[TUNNEL.md](docs/TUNNEL.md)** — туннели через ретрансляторы +
+  file-transfer поверх туннелей.
 - **[DEPLOY.md](docs/DEPLOY.md)** — Docker-развёртывание: 4
   bootstrap-схемы, скрипты управления, диагностика.
+- **[EXPERIMENTS.md](docs/EXPERIMENTS.md)** — план экспериментов
+  этапа 7 (E7-1 … E7-8): гипотезы, метрики, критерии.
 - **[VISUALIZATION.md](docs/VISUALIZATION.md)** — Graphviz-графы,
-  HTML-отчёт с D3.js.
+  HTML-отчёт с D3.js, метрики всех экспериментов.

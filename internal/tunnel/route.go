@@ -14,6 +14,16 @@ type RouteSource interface {
 	Ping(addr string) (time.Duration, error)
 }
 
+type SelectMode string
+
+const (
+	SelectRanked SelectMode = "ranked"
+
+	SelectRandom SelectMode = "random"
+
+	SelectSubnet SelectMode = "subnet"
+)
+
 type RouteBuilder struct {
 	LocalID   [32]byte
 	LocalAddr string
@@ -25,6 +35,8 @@ type RouteBuilder struct {
 	Log Logger
 
 	PingTimeout time.Duration
+
+	SelectMode SelectMode
 }
 
 func NewRouteBuilder(localID [32]byte, localAddr string, maxHops uint8,
@@ -39,6 +51,7 @@ func NewRouteBuilder(localID [32]byte, localAddr string, maxHops uint8,
 		Source:      src,
 		Profiles:    profiles,
 		PingTimeout: 3 * time.Second,
+		SelectMode:  SelectRanked,
 	}
 }
 
@@ -66,24 +79,24 @@ func (rb *RouteBuilder) Build(destID [32]byte, exclude [][32]byte) ([]Hop, error
 		"dest", fmt.Sprintf("%x", destID[:4]),
 		"total", len(candidates),
 		"excluded", len(exclude),
-		"max_hops", rb.MaxHops)
+		"max_hops", rb.MaxHops,
+		"mode", string(rb.SelectMode))
 
-	ranked := rb.Profiles.Rank(candidates)
-
-	topN := 5
-	if len(ranked) < topN {
-		topN = len(ranked)
-	}
-	for i := 0; i < topN; i++ {
-		rb.logCandidate("route: candidate ranked", i, ranked[i])
+	var pool [][32]byte
+	switch rb.SelectMode {
+	case SelectRandom:
+		pool = rb.orderRandom(candidates)
+	case SelectSubnet:
+		pool = rb.orderSubnetAware(candidates, destID, exclude)
+	default:
+		pool = rb.orderRanked(candidates)
 	}
 
 	poolSize := int(rb.MaxHops) * 2
-	if poolSize > len(ranked) {
-		poolSize = len(ranked)
+	if poolSize > len(pool) {
+		poolSize = len(pool)
 	}
-	pool := ranked[:poolSize]
-	shuffleIDs(pool)
+	pool = pool[:poolSize]
 
 	relays := make([]Hop, 0, rb.MaxHops)
 	used := map[[32]byte]bool{
@@ -104,6 +117,8 @@ func (rb *RouteBuilder) Build(destID [32]byte, exclude [][32]byte) ([]Hop, error
 			rb.logReject(id, "no_addr", "")
 			continue
 		}
+
+		rb.Profiles.RecordAddr(id, addr)
 
 		start := time.Now()
 		_, err := rb.Source.Ping(addr)
@@ -147,9 +162,68 @@ func (rb *RouteBuilder) Build(destID [32]byte, exclude [][32]byte) ([]Hop, error
 	rb.logf("route: built",
 		"dest", fmt.Sprintf("%x", destID[:4]),
 		"relays", len(relays),
-		"path", hops)
+		"path", hops,
+		"mode", string(rb.SelectMode))
 
 	return path, nil
+}
+
+func (rb *RouteBuilder) orderRanked(candidates [][32]byte) [][32]byte {
+	ranked := rb.Profiles.Rank(candidates)
+	topN := 5
+	if len(ranked) < topN {
+		topN = len(ranked)
+	}
+	for i := 0; i < topN; i++ {
+		rb.logCandidate("route: candidate ranked", i, ranked[i])
+	}
+	poolSize := int(rb.MaxHops) * 2
+	if poolSize > len(ranked) {
+		poolSize = len(ranked)
+	}
+	pool := make([][32]byte, poolSize)
+	copy(pool, ranked[:poolSize])
+	shuffleIDs(pool)
+	return pool
+}
+
+func (rb *RouteBuilder) orderRandom(candidates [][32]byte) [][32]byte {
+	pool := make([][32]byte, len(candidates))
+	copy(pool, candidates)
+	shuffleIDs(pool)
+	rb.logf("route: candidate order (random)", "count", len(pool))
+	return pool
+}
+
+func (rb *RouteBuilder) orderSubnetAware(candidates [][32]byte, destID [32]byte, exclude [][32]byte) [][32]byte {
+	ranked := rb.Profiles.Rank(candidates)
+
+	usedSubnets := map[string]bool{}
+	pool := make([][32]byte, 0, len(ranked))
+
+	for _, id := range ranked {
+		subnet := rb.Profiles.SubnetOf(id)
+		if subnet == "" {
+			pool = append(pool, id)
+			continue
+		}
+		if usedSubnets[subnet] {
+			rb.logf("route: subnet-diversity reject",
+				"node_id", fmt.Sprintf("%x", id[:4]),
+				"subnet", subnet)
+			continue
+		}
+		usedSubnets[subnet] = true
+		pool = append(pool, id)
+	}
+
+	rb.logf("route: subnet-aware pool",
+		"candidates", len(candidates),
+		"after_diversity", len(pool),
+		"unique_subnets", len(usedSubnets))
+
+	shuffleIDs(pool)
+	return pool
 }
 
 func (rb *RouteBuilder) logf(msg string, args ...any) {
@@ -173,6 +247,7 @@ func (rb *RouteBuilder) logCandidate(msg string, rank int, id [32]byte) {
 	rb.Log.Debug(msg,
 		"rank", rank,
 		"node_id", fmt.Sprintf("%x", id[:4]),
+		"subnet", p.Subnet,
 		"successes", p.Successes,
 		"failures", p.Failures,
 		"success_ema", fmt.Sprintf("%.3f", p.SuccessEMA),
@@ -193,6 +268,7 @@ func (rb *RouteBuilder) logReject(id [32]byte, reason, addr string) {
 	}
 	if p, ok := rb.Profiles.Get(id); ok {
 		args = append(args,
+			"subnet", p.Subnet,
 			"success_ema", fmt.Sprintf("%.3f", p.SuccessEMA),
 			"failures", p.Failures,
 		)
@@ -212,6 +288,7 @@ func (rb *RouteBuilder) logAccept(hopIndex int, id [32]byte, addr string, rtt ti
 	}
 	if p, ok := rb.Profiles.Get(id); ok {
 		args = append(args,
+			"subnet", p.Subnet,
 			"success_ema", fmt.Sprintf("%.3f", p.SuccessEMA),
 			"latency_ema", p.LatencyEMA.String(),
 		)
