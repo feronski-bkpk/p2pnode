@@ -99,28 +99,31 @@ func (n *Node) SendMessage(destID [32]byte, text string) (tunnel.MessageID, erro
 	if n.tunnelMgr == nil {
 		return tunnel.MessageID{}, fmt.Errorf("node: tunnel not initialized")
 	}
-	return n.tunnelMgr.SendMessage(destID, text)
+	return n.tunnelMgr.SendMessage(n.nodeCtx(), destID, text)
 }
 
 func (n *Node) BuildTunnelPool(destID [32]byte) error {
 	if n.tunnelMgr == nil {
 		return fmt.Errorf("node: tunnel not initialized")
 	}
+	ctx := n.nodeCtx()
 	res := n.Client.LookupNode(
+		ctx,
 		n.Local,
 		n.Table,
 		n.Identity.NodeID,
 		rpc.LookupConfig{
-			Alpha:   n.Config.Alpha,
-			K:       n.Config.KBucketSize,
-			Timeout: n.Config.PingTimeout,
+			Alpha:         n.Config.Alpha,
+			K:             n.Config.KBucketSize,
+			Timeout:       n.Config.RPCTimeout,
+			LookupTimeout: n.Config.LookupTimeout,
 		},
 	)
 	n.Log.Info("pool: routing table enriched",
 		"table_size", n.Table.Size(),
 		"rpc", res.RPC,
 		"iterations", res.Iterations)
-	_, err := n.tunnelMgr.BuildPool(destID)
+	_, err := n.tunnelMgr.BuildPool(ctx, destID)
 	return err
 }
 
@@ -238,9 +241,9 @@ func (s *nodeRouteSource) AddrOf(nodeID [32]byte) (string, bool) {
 	return "", false
 }
 
-func (s *nodeRouteSource) Ping(addr string) (time.Duration, error) {
+func (s *nodeRouteSource) Ping(ctx context.Context, addr string) (time.Duration, error) {
 	start := time.Now()
-	_, err := s.n.Client.Ping(s.n.Local, addr, nil, s.n.Config.PingTimeout)
+	_, err := s.n.Client.Ping(ctx, s.n.Local, addr, nil, s.n.Config.PingTimeout)
 	if err != nil {
 		return 0, err
 	}

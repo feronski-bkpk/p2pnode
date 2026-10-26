@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -167,6 +168,7 @@ func writeFindValueRespNodes(conn transport.Conn, reqID protocol.RequestID, tabl
 }
 
 func (c *Client) StoreRPC(
+	ctx context.Context,
 	local routing.Contact,
 	target routing.Contact,
 	key store.ID,
@@ -185,7 +187,7 @@ func (c *Client) StoreRPC(
 		return false, err
 	}
 
-	frame, err := c.Call(target.Addr(), protocol.MsgStoreRequest, protocol.MsgStoreResponse, payload, timeout)
+	frame, err := c.Call(ctx, target.Addr(), protocol.MsgStoreRequest, protocol.MsgStoreResponse, payload, timeout)
 	if err != nil {
 		return false, err
 	}
@@ -198,6 +200,7 @@ func (c *Client) StoreRPC(
 }
 
 func (c *Client) FindValueRPC(
+	ctx context.Context,
 	local routing.Contact,
 	target routing.Contact,
 	key store.ID,
@@ -212,7 +215,7 @@ func (c *Client) FindValueRPC(
 		return nil, false, nil, err
 	}
 
-	frame, err := c.Call(target.Addr(), protocol.MsgFindValueRequest, protocol.MsgFindValueResponse, payload, timeout)
+	frame, err := c.Call(ctx, target.Addr(), protocol.MsgFindValueRequest, protocol.MsgFindValueResponse, payload, timeout)
 	if err != nil {
 		return nil, false, nil, err
 	}

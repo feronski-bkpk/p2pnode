@@ -215,10 +215,10 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/node ./cmd/node
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata bash netcat-openbsd
+RUN apk add --no-cache ca-certificates tzdata bash netcat-openbsd iproute2 nftables
 COPY --from=build /out/node /usr/local/bin/node
 ENV NODE_STATE_DIR=/state LISTEN_HOST=0.0.0.0 LISTEN_PORT=9001 LOG_LEVEL=INFO
-RUN mkdir -p /state /logs /metrics
+RUN mkdir -p /state /logs /metrics /recv
 WORKDIR /
 ENTRYPOINT ["/usr/local/bin/node"]
 ```
@@ -249,6 +249,21 @@ entrypoint — можно передавать флаги через `docker com
 
 5. **Для `multiseed`** — seed'ы (`node-01` … `node-03`) **не зависят**
    ни от кого, остальные зависят от **всех трёх**, но **исключая себя**.
+
+6. **`SUBNET_DIVERSITY_LIMIT`** (default не задан = `2`) —
+   для **демо** (netem, failures, file-transfer) рекомендуется **`0`**
+   или **`4`** (bucket заполняется до `K`). Для **E7-8** (Eclipse) —
+   **оставить** `2` (diversity **нужен**).
+
+7. **`REFRESH_INTERVAL_MS`** (default не задан = `60000`) — для
+   **быстрых тестов** рекомендуется **`5000`**.
+
+**Пример для демо (полное заполнение bucket'а):**
+
+```bash
+SUBNET_DIVERSITY_LIMIT=0 REFRESH_INTERVAL_MS=5000 \
+    ./scripts/docker_gen_compose.sh 15 star
+```
 
 ### 5.4. Отдельная сеть
 
@@ -396,6 +411,20 @@ sleep 30
 5. After 30 lookup'ов с `BOOTSTRAP=node-02,03,04`.
 6. Сравнение: `found_after / found_before ≥ 0.3`.
 
+**Дополнительно:** `TestLookupAfterSeedDown` (unit,
+`internal/integration/lookup_seed_down_test.go`):
+
+1. Snapshot таблицы работающего узла до.
+2. Цель — случайный ID, которого нет в таблице.
+3. Lookup до kill seed'а (`rpc > 0`).
+4. Kill seed.
+5. Lookup после — worker продолжает работать, `rpc > 0`, seed
+   **не в** `contacts`.
+6. `RemoveIfDead(seed)` → `true` (seed удалён).
+
+**`TestBootstrapFailsOnEmptyTable`** — `Bootstrap` с недоступным seed'ом
+→ **error** (`routing table is empty`), таблица пустая.
+
 ### 7.6. 3 сценария отказа
 
 ```bash
@@ -500,6 +529,32 @@ BOOTSTRAP="node-02:9002,node-03:9003,node-04:9004" \
 **Решение:** в `docker_collect.sh` **убрать** блок копирования
 lookup'ов — они уже в `metrics/lookups/`.
 
+### 8.6. `Bootstrap` возвращает ошибку
+
+**Симптом:** `bootstrap failed: routing table is empty`.
+
+**Причина:** все seed'ы недоступны.
+
+**Проверка:**
+```bash
+docker compose ps
+docker compose logs node-01 | tail -20
+```
+
+**Решение:** поднять seed (`docker_up.sh ...`), проверить
+`BOOTSTRAP_PEERS`.
+
+### 8.7. `Publish` возвращает `ErrNotEnoughReplicas`
+
+**Симптом:** `node: not enough replicas confirmed: got 0/2`.
+
+**Причина:** N=1 (нет кандидатов) или anti-rollback на репликах
+(устаревшая версия отклонена).
+
+**Решение:** для N≥3 — проверить, что `LookupNode` работает
+(`rpc > 0`). Для `seq` — проверить, что публикуется версия
+**больше** существующей.
+
 ## 9. Параметры compose
 
 Все параметры задаются **env-переменными** в `docker-compose.yml`.
@@ -521,6 +576,11 @@ CLI-флаги можно **добавить** через `docker compose run`.
 | Пауза перед publish | `PUBLISH_WAIT_MS` | `3000` |
 | TTL туннеля | `TUNNEL_TTL_SEC` | `300` |
 | Размер пула | `TUNNEL_POOL_SIZE` | `3` |
+| Таймаут handshake | `HANDSHAKE_TIMEOUT_MS` | `5000` |
+| Таймаут RPC | `RPC_TIMEOUT_MS` | `10000` |
+| Таймаут lookup | `LOOKUP_TIMEOUT_MS` | `30000` |
+| Интервал refresh | `REFRESH_INTERVAL_MS` | `60000` |
+| Subnet diversity limit | `SUBNET_DIVERSITY_LIMIT` | `2` (0 = off) |
 
 ## 10. Ограничения
 

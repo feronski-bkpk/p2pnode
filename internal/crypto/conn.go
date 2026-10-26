@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"p2pnode/internal/protocol"
 	"p2pnode/internal/transport"
@@ -207,6 +208,18 @@ func (c *SecureConn) Close() error {
 	c.recvAEAD = nil
 
 	return c.raw.Close()
+}
+
+func (c *SecureConn) SetDeadline(t time.Time) error {
+	return c.raw.SetDeadline(t)
+}
+
+func (c *SecureConn) SetReadDeadline(t time.Time) error {
+	return c.raw.SetReadDeadline(t)
+}
+
+func (c *SecureConn) SetWriteDeadline(t time.Time) error {
+	return c.raw.SetWriteDeadline(t)
 }
 
 func zeroBytes(b []byte) {

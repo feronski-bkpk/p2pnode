@@ -45,6 +45,8 @@ func TestTwoNodesExchange(t *testing.T) {
 		}
 		defer c.Close()
 
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+
 		f, err := c.ReadFrame()
 		if err != nil {
 			t.Errorf("server ReadFrame: %v", err)
@@ -54,6 +56,7 @@ func TestTwoNodesExchange(t *testing.T) {
 			t.Errorf("server got unexpected frame: %v %q", f.Type, f.Payload)
 			return
 		}
+		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := c.WriteFrame(newTestFrame(protocol.MsgPong, []byte("hello from server"))); err != nil {
 			t.Errorf("server WriteFrame: %v", err)
 		}
@@ -65,10 +68,12 @@ func TestTwoNodesExchange(t *testing.T) {
 	}
 	defer c.Close()
 
+	_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := c.WriteFrame(newTestFrame(protocol.MsgPing, []byte("hello from client"))); err != nil {
 		t.Fatalf("client WriteFrame: %v", err)
 	}
 
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	got, err := c.ReadFrame()
 	if err != nil {
 		t.Fatalf("client ReadFrame: %v", err)
@@ -89,10 +94,12 @@ func TestManyFrames(t *testing.T) {
 		c, _ := ln.Accept()
 		defer c.Close()
 		for i := 0; i < 1000; i++ {
+			_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 			f, err := c.ReadFrame()
 			if err != nil {
 				return
 			}
+			_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			_ = c.WriteFrame(f)
 		}
 	}()
@@ -108,9 +115,11 @@ func TestManyFrames(t *testing.T) {
 	}
 	for i := 0; i < 1000; i++ {
 		p := payloads[i%len(payloads)]
+		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := c.WriteFrame(newTestFrame(protocol.MsgFindNodeRequest, p)); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 		got, err := c.ReadFrame()
 		if err != nil {
 			t.Fatalf("read %d: %v", i, err)
@@ -135,7 +144,6 @@ func TestDialTimeout(t *testing.T) {
 func TestReadTimeout(t *testing.T) {
 	tr := NewWithOptions(Options{
 		ConnectTimeout: 1 * time.Second,
-		ReadTimeout:    200 * time.Millisecond,
 	})
 
 	ln, _ := tr.Listen("127.0.0.1:0")
@@ -146,8 +154,8 @@ func TestReadTimeout(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = c
 		time.Sleep(2 * time.Second)
+		c.Close()
 	}()
 
 	c, err := tr.Dial(ln.Addr())
@@ -156,12 +164,22 @@ func TestReadTimeout(t *testing.T) {
 	}
 	defer c.Close()
 
+	if err := c.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+
+	start := time.Now()
 	_, err = c.ReadFrame()
+	elapsed := time.Since(start)
+
 	if err == nil {
 		t.Fatal("want read error, got nil")
 	}
 	if !errors.Is(err, transport.ErrTimeout) {
 		t.Fatalf("want ErrTimeout, got %v", err)
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("read deadline not enforced: %v", elapsed)
 	}
 }
 
@@ -184,6 +202,7 @@ func TestConnectionClosedByPeer(t *testing.T) {
 	defer c.Close()
 
 	time.Sleep(50 * time.Millisecond)
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, err = c.ReadFrame()
 	if err == nil {
 		t.Fatal("want error, got nil")

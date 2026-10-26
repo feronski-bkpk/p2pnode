@@ -20,7 +20,7 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		ConnectTimeout: 3000 * time.Millisecond,
-		ReadTimeout:    5000 * time.Millisecond,
+		ReadTimeout:    0,
 	}
 }
 
@@ -30,39 +30,17 @@ type conn struct {
 	w  *bufio.Writer
 
 	wmu sync.Mutex
-
-	rmu         sync.RWMutex
-	readTimeout time.Duration
 }
 
 func newConn(nc net.Conn, opts Options) *conn {
 	return &conn{
-		nc:          nc,
-		r:           bufio.NewReaderSize(nc, 64*1024),
-		w:           bufio.NewWriterSize(nc, 64*1024),
-		readTimeout: opts.ReadTimeout,
+		nc: nc,
+		r:  bufio.NewReaderSize(nc, 64*1024),
+		w:  bufio.NewWriterSize(nc, 64*1024),
 	}
-}
-
-func (c *conn) SetReadTimeout(d time.Duration) {
-	c.rmu.Lock()
-	c.readTimeout = d
-	c.rmu.Unlock()
 }
 
 func (c *conn) ReadFrame() (protocol.Frame, error) {
-	c.rmu.RLock()
-	timeout := c.readTimeout
-	c.rmu.RUnlock()
-
-	if timeout > 0 {
-		if err := c.nc.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-			return protocol.Frame{}, err
-		}
-	} else {
-		_ = c.nc.SetReadDeadline(time.Time{})
-	}
-
 	f, err := protocol.ReadFrame(c.r)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -82,9 +60,17 @@ func (c *conn) WriteFrame(f protocol.Frame) error {
 	defer c.wmu.Unlock()
 
 	if _, err := f.WriteTo(c.w); err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return transport.ErrTimeout
+		}
 		return err
 	}
 	if err := c.w.Flush(); err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return transport.ErrTimeout
+		}
 		return err
 	}
 	return nil
@@ -93,3 +79,15 @@ func (c *conn) WriteFrame(f protocol.Frame) error {
 func (c *conn) RemoteAddr() string { return c.nc.RemoteAddr().String() }
 
 func (c *conn) Close() error { return c.nc.Close() }
+
+func (c *conn) SetDeadline(t time.Time) error {
+	return c.nc.SetDeadline(t)
+}
+
+func (c *conn) SetReadDeadline(t time.Time) error {
+	return c.nc.SetReadDeadline(t)
+}
+
+func (c *conn) SetWriteDeadline(t time.Time) error {
+	return c.nc.SetWriteDeadline(t)
+}

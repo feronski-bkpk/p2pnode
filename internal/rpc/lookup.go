@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"sort"
@@ -11,9 +12,10 @@ import (
 )
 
 type LookupConfig struct {
-	Alpha   int
-	K       int
-	Timeout time.Duration
+	Alpha         int
+	K             int
+	Timeout       time.Duration
+	LookupTimeout time.Duration
 }
 
 type LookupResult struct {
@@ -42,12 +44,21 @@ type LookupIteration struct {
 	Queried  []ContactLog `json:"queried"`
 	Found    []ContactLog `json:"found"`
 	Timeouts []ContactLog `json:"timeouts"`
+	Dead     []ContactLog `json:"dead,omitempty"`
 }
 
 type ContactLog struct {
 	NodeID string `json:"node_id"`
 	Addr   string `json:"addr"`
 }
+
+type candidateState int
+
+const (
+	stateUnqueried candidateState = iota
+	stateAlive
+	stateDead
+)
 
 type MultiPathResult struct {
 	Target       routing.ID
@@ -61,11 +72,19 @@ type MultiPathResult struct {
 }
 
 func (c *Client) LookupNode(
+	ctx context.Context,
 	local routing.Contact,
 	table *routing.RoutingTable,
 	target routing.ID,
 	cfg LookupConfig,
 ) LookupResult {
+	lookupTimeout := cfg.LookupTimeout
+	if lookupTimeout <= 0 {
+		lookupTimeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+
 	start := time.Now()
 	result := LookupResult{
 		Target: target,
@@ -82,25 +101,44 @@ func (c *Client) LookupNode(
 	})
 
 	shortlist := table.Closest(target, cfg.K)
-	queried := make(map[routing.ID]bool)
+
+	states := make(map[routing.ID]candidateState, len(shortlist))
+	for _, ct := range shortlist {
+		states[ct.NodeID] = stateUnqueried
+	}
+	inFlight := make(map[routing.ID]bool)
 
 	for iter := 0; iter < routing.IDBits; iter++ {
+		if err := ctx.Err(); err != nil {
+			c.ev.Log("lookup_ctx_done", map[string]any{
+				"lookup_target": target.Short(),
+				"err":           err.Error(),
+			})
+			break
+		}
+
 		var toQuery []routing.Contact
 		for _, ct := range shortlist {
-			if queried[ct.NodeID] {
+			if states[ct.NodeID] != stateUnqueried {
+				continue
+			}
+			if inFlight[ct.NodeID] {
 				continue
 			}
 			if ct.NodeID == local.NodeID {
 				continue
 			}
 			toQuery = append(toQuery, ct)
-			queried[ct.NodeID] = true
 			if len(toQuery) >= cfg.Alpha {
 				break
 			}
 		}
 		if len(toQuery) == 0 {
 			break
+		}
+
+		for _, ct := range toQuery {
+			inFlight[ct.NodeID] = true
 		}
 
 		iterLog := LookupIteration{Iter: iter}
@@ -121,7 +159,7 @@ func (c *Client) LookupNode(
 			wg.Add(1)
 			go func(ct routing.Contact) {
 				defer wg.Done()
-				contacts, err := c.FindNodeRPC(local, ct, target, cfg.Timeout)
+				contacts, err := c.FindNodeRPC(ctx, local, ct, target, cfg.Timeout)
 				ch <- reply{from: ct, contacts: contacts, err: err}
 			}(ct)
 		}
@@ -130,23 +168,44 @@ func (c *Client) LookupNode(
 
 		var newContacts []routing.Contact
 		foundTarget := false
+		var deadIDs []routing.ID
+
 		for r := range ch {
 			result.RPC++
+			delete(inFlight, r.from.NodeID)
+
 			if r.err != nil {
 				result.Timeouts++
 				iterLog.Timeouts = append(iterLog.Timeouts, contactLog(r.from))
-				table.Remove(r.from.NodeID)
+
+				if table.RemoveIfDead(ctx, r.from.NodeID) {
+					states[r.from.NodeID] = stateDead
+					deadIDs = append(deadIDs, r.from.NodeID)
+					iterLog.Dead = append(iterLog.Dead, contactLog(r.from))
+				} else {
+					states[r.from.NodeID] = stateAlive
+				}
 				continue
 			}
+
+			states[r.from.NodeID] = stateAlive
 			r.from.MarkVerified()
 			table.Add(r.from, nil)
+
 			for _, ct := range r.contacts {
 				iterLog.Found = append(iterLog.Found, contactLog(ct))
 				if ct.NodeID == target {
 					foundTarget = true
 				}
 				newContacts = append(newContacts, ct)
+				if _, ok := states[ct.NodeID]; !ok {
+					states[ct.NodeID] = stateUnqueried
+				}
 			}
+		}
+
+		if len(deadIDs) > 0 {
+			shortlist = removeDeadFromShortlist(shortlist, states)
 		}
 
 		for _, ct := range newContacts {
@@ -175,7 +234,7 @@ func (c *Client) LookupNode(
 
 		allQueried := true
 		for _, ct := range shortlist {
-			if !queried[ct.NodeID] {
+			if states[ct.NodeID] == stateUnqueried {
 				allQueried = false
 				break
 			}
@@ -185,15 +244,22 @@ func (c *Client) LookupNode(
 		}
 	}
 
-	result.Contacts = shortlist
+	filtered := make([]routing.Contact, 0, len(shortlist))
+	for _, ct := range shortlist {
+		if states[ct.NodeID] != stateDead {
+			filtered = append(filtered, ct)
+		}
+	}
+	result.Contacts = filtered
+
 	result.Duration = time.Since(start)
 	result.Log.EndUnixMs = time.Now().UnixMilli()
-	for _, ct := range shortlist {
+	for _, ct := range result.Contacts {
 		result.Log.FinalContacts = append(result.Log.FinalContacts, contactLog(ct))
 	}
 
 	foundTarget := false
-	for _, ct := range shortlist {
+	for _, ct := range result.Contacts {
 		if ct.NodeID == target {
 			foundTarget = true
 			break
@@ -212,7 +278,18 @@ func (c *Client) LookupNode(
 	return result
 }
 
+func removeDeadFromShortlist(shortlist []routing.Contact, states map[routing.ID]candidateState) []routing.Contact {
+	out := shortlist[:0]
+	for _, ct := range shortlist {
+		if states[ct.NodeID] != stateDead {
+			out = append(out, ct)
+		}
+	}
+	return out
+}
+
 func (c *Client) LookupNodeMultiPath(
+	ctx context.Context,
 	local routing.Contact,
 	seeds []routing.Contact,
 	target routing.ID,
@@ -260,7 +337,7 @@ func (c *Client) LookupNodeMultiPath(
 				return
 			}
 
-			res := c.LookupNode(local, tbl, target, cfg)
+			res := c.LookupNode(ctx, local, tbl, target, cfg)
 
 			addr := ""
 			for _, ct := range res.Contacts {

@@ -26,8 +26,17 @@ Eclipse/Sybil.
 | `payload_length` | 4 | Длина payload, проверяется **до** выделения буфера |
 | `payload` | ≤65536 | Сериализованное сообщение (msgpack) |
 
-**Кадрирование:** `io.ReadFull`. Один `read()` может вернуть меньше
-байт, чем запрошено.
+**Кадрирование:** `io.ReadFull` — гарантирует ровно `len(buf)` байт,
+даже если `read()` возвращает данные **произвольными порциями**
+(1 байт, разрыв внутри заголовка, несколько кадров в одном потоке).
+**Тесты** (`internal/protocol/frame_test.go`):
+
+- `TestReadFrame_RandomChunkBoundaries` — 2000 итераций, случайные
+  границы.
+- `TestReadFrame_ChunkedSizes` — фиксированные порции: 1, 5, 23, 24,
+  25, 124, `MaxFramePayload/7`.
+- `TestReadFrame_TwoFramesChunked` — два кадра в потоке, `maxChunk=1..1000`.
+- `TestReadFrame_EOFWithData` — `read() → (n>0, io.EOF)`.
 
 **Максимальный размер payload:** `MAX_FRAME_PAYLOAD = 65536`.
 
@@ -295,11 +304,11 @@ type TunnelClosePayload struct {
 ```go
 type FileHeaderPayload struct {
     FileID      [16]byte `msgpack:"file_id"`
-    Name        string   `msgpack:"name"`
+    Name        string   `msgpack:"name"`        
     TotalSize   uint64   `msgpack:"total_size"`
     TotalChunks uint32   `msgpack:"total_chunks"`
-    SHA256      []byte   `msgpack:"sha256"`     
-    ChunkSize   uint32   `msgpack:"chunk_size"` 
+    SHA256      []byte   `msgpack:"sha256"`
+    ChunkSize   uint32   `msgpack:"chunk_size"`
 }
 
 type FileChunkPayload struct {
@@ -376,27 +385,45 @@ type NodeRecord struct {
 
 **Входные данные:** `target_id`, `K=4`, `ALPHA=3`.
 
+**Состояния кандидатов** (`states map[ID]candidateState`):
+- `stateUnqueried` — ещё не опрашивался;
+- `stateAlive` — успешно опрошен (или жив после проверки);
+- `stateDead` — RPC failed + `RemoveIfDead == true` (удалён из таблицы).
+
+**`inFlight map[ID]bool`** — кандидаты, которые сейчас опрашиваются
+(исключает повторный выбор в той же итерации).
+
 ```
 shortlist = table.Closest(target, K)
-queried = {}
-result = []
+states    = {id: stateUnqueried}
+inFlight  = {}
 found_target = false
 
 for iter in 0..IDBits:
     toQuery = []
     for ct in shortlist:
-        if ct.ID in queried: continue
+        if states[ct.ID] != stateUnqueried: continue
+        if inFlight[ct.ID]: continue
         if ct.ID == self.ID: continue
         toQuery.append(ct)
-        queried.add(ct.ID)
         if len(toQuery) >= ALPHA: break
     if len(toQuery) == 0: break
+
+    for ct in toQuery: inFlight[ct.ID] = true
 
     parallel:
         for ct in toQuery:
             resp = FindNodeRPC(ct, target)
-            if resp.error: timeout
+            delete(inFlight, ct.ID)
+            if resp.error:
+                # PING перед удалением
+                if RemoveIfDead(ctx, ct.ID):
+                    states[ct.ID] = stateDead
+                    shortlist.remove(ct)
+                else:
+                    states[ct.ID] = stateAlive
             else:
+                states[ct.ID] = stateAlive
                 for c in resp.contacts:
                     if c.ID == target: found_target = true
                     shortlist.append(c)
@@ -404,12 +431,23 @@ for iter in 0..IDBits:
 
     shortlist = unique_sorted(shortlist, target, K)
     if found_target: break
-    if all(shortlist) in queried: break
+    if all(shortlist) in stateAlive/stateUnqueried == queried: break
 
-return shortlist[0:K]
+# Финальный result.Contacts — только не-stateDead.
+return [ct for ct in shortlist if states[ct.ID] != stateDead][0:K]
 ```
 
-**Условие остановки:** target найден ИЛИ все K ближайших опрошены.
+**Ключевое:**
+- **Не `break`** на первом `found` — ждём **все** ответы.
+- При таймауте RPC — `RemoveIfDead(ctx, id)` (PING под `ctx`).
+  Мёртвый → `stateDead` + удаление из `shortlist`; живой →
+  `stateAlive`.
+- **Финальный** `result.Contacts` — **только** `stateAlive` +
+  `stateUnqueried`.
+- `LookupIteration.Dead []ContactLog` — новое поле (для отчёта).
+
+**Условие остановки:** target найден ИЛИ все `stateUnqueried`
+опрошены.
 
 ### 5.2. Multi-path lookup
 
@@ -450,13 +488,19 @@ else:
 **Входные данные:** `seed_addr`.
 
 ```
-seed = Ping(seed_addr)             // handshake + PING
+seed = Ping(ctx, seed_addr)        // handshake + PING
 table.Add(seed)
-result = LookupNode(self.ID)       // обычный режим
+result = LookupNode(ctx, self.ID)  // обычный режим
 // или для -skip-self-lookup:
-nodes = FindNodeRPC(seed, self.ID)
+nodes = FindNodeRPC(ctx, seed, self.ID)
 for c in nodes: table.Add(c)
+
+# Если после всех seed'ов table.Size() == 0:
+return error("bootstrap failed: routing table is empty")
 ```
+
+**`Bootstrap` возвращает error,** если таблица пустая — явная
+сигнализация «не удалось присоединиться к сети».
 
 ### 5.4. STORE
 
@@ -464,56 +508,107 @@ for c in nodes: table.Add(c)
 key = NodeKeyForID(rec.NodeID)
 value = rec.Encode()
 
-candidates = LookupNode(key)
+candidates = LookupNode(ctx, key)
 R = 3
+minReplicas = R/2 + 1  // = 2
 
 parallel:
     for c in candidates[0:R]:
-        ok = StoreRPC(c, key, value, ttl)
+        ok = StoreRPC(ctx, c, key, value, ttl)
         if ok: replicas++
 
 store.Put(key, rec, now, ttl)
-if replicas >= R/2+1 OR local_stored: return success
+
+if replicas < minReplicas:
+    return ErrNotEnoughReplicas
+if candidates == 0:
+    return ErrNotEnoughReplicas  // нет узлов для репликации
 ```
 
 **Если alias задан:** повторить для `AliasKeyForName(alias)`.
 
+**`Publish` возвращает `ErrNotEnoughReplicas`,** если `Replicas < 2`
+или `candidates == 0`. `StoreResult` **возвращается всегда** (даже
+при error) — клиент видит `Replicas`, `LocalStored`, `SelectedNodes`.
+
 ### 5.5. FIND_VALUE
+
+**Цель:** вернуть запись с **максимальным `sequence_number`**
+среди всех реплик — устаревшая реплика не перекрывает актуальную.
 
 ```
 if store.Get(key) found: return value
 
 shortlist = table.Closest(key, K)
 queried = {}
+bestRec = nil
+bestSeq = 0
+
 for iter in 0..IDBits:
     toQuery = первые ALPHA непрошенных
     if empty: break
+
     parallel:
         for c in toQuery:
             resp = FindValueRPC(c, key)
-            if resp.found: return resp.value
-            for n in resp.nodes:
-                shortlist.append(n); table.Add(n)
+            # Собрать ВСЕ ответы (не break на первом found)
+            if resp.found:
+                rec = record.Decode(resp.value)
+                if rec.Validate(now) fails: skip (Debug-лог)
+                if bestRec == nil || rec.SequenceNumber > bestSeq:
+                    bestRec = rec
+                    bestSeq = rec.SequenceNumber
+            else:
+                for n in resp.nodes:
+                    shortlist.append(n); table.Add(n)
+
+    if bestRec != nil:
+        store.Put(key, bestRec, now, TTL)  # anti-rollback
+        return bestRec
+
     shortlist = unique_sorted(shortlist, key, K)
 
 return ErrValueNotFound
 ```
 
+**Ключевое:**
+- **Не `break`** на первом `found` — ждём **все** ответы.
+- `bestRec` — **max(sequence_number)** среди декодированных и
+  провалидированных.
+- Невалидные реплики — skip + Debug-лог.
+- `store.Put(bestRec)` — anti-rollback (если в store уже свежее —
+  `Put` вернёт `false`, store не испортится; клиенту отдаём `bestRec`).
+- `events.jsonl`: `findvalue_found` с `replicas`, `best_seq`.
+
+**Тест:** `TestFindValuePicksHighestSeq` — две реплики (`seq=5`,
+`seq=10`), `FindValue` → `seq=10` (5/5 PASS, не flaky).
+
 ### 5.6. Handshake (AKE)
+
+**Дедлайн:** `Handshake(ctx, addr)` — `deadline = ctx.Deadline()`,
+`raw.SetDeadline(deadline)` **после** `Dial`. Покрывает Hello → Reply →
+Confirm. **Никакого** `HandshakeTimeout=10s`.
 
 **Инициатор:**
 
 ```
 1. Dial(addr) → conn
-2. hs = NewHandshakeState(id_pub, id_priv, isInitiator=true)
-3. conn.WriteFrame(HANDSHAKE_HELLO, hs.BuildHello())
-4. replyFrame = conn.ReadFrame()
-5. if replyMsg.ResponderID != expected: fail
-6. hs.ProcessReply(replyMsg)
-7. conn.WriteFrame(HANDSHAKE_CONFIRM, hs.BuildConfirm())
-8. keys = DeriveKeys(...)
-9. secureConn = NewSecureConn(conn, keys...)
+2. if ctx has no deadline: error
+3. conn.SetDeadline(ctx.Deadline())
+4. hs = NewHandshakeState(id_pub, id_priv, isInitiator=true)
+5. conn.WriteFrame(HANDSHAKE_HELLO, hs.BuildHello())
+6. replyFrame = conn.ReadFrame()
+7. if replyMsg.ResponderID != expected: fail
+8. hs.ProcessReply(replyFrame, initID, respID)
+9. conn.WriteFrame(HANDSHAKE_CONFIRM, hs.BuildConfirm(...))
+10. keys = DeriveKeys(...)
+11. secureConn = NewSecureConn(conn, keys...)
 ```
+
+**Responder:** `Server.handleConn` ставит
+`conn.SetReadDeadline(now + HandshakeTimeout)` на первый кадр; тот же
+дедлайн — на reply+confirm; после handshake —
+`secure.SetDeadline(time.Time{})`.
 
 **4 DH:**
 
@@ -548,9 +643,15 @@ k_r→i = HKDF-Expand(HKDF-Extract(salt, ikm), "responder→initiator", 32)
 **Инициатор** выбирает `FullPath = [init, relay1, ..., relayN, dest]`.
 
 ```
-1. Сгенерировать tunnel_id, e2e_eph_priv/pub, e2e_random.
-2. Отправить TUNNEL_BUILD с HopIndex=1.
-3. Ждать ACK'и от каждого ретранслятора + BUILD_OK от dest.
+1. BuildCoordinator.Build(ctx, destID, path):
+   - ctx, cancel = context.WithTimeout(ctx, bc.BuildTimeout)
+   - deadline = ctx.Deadline()
+   - conn = Dial(relay1)
+   - conn.SetDeadline(deadline)  ← единый на write+read
+2. Сгенерировать tunnel_id, e2e_eph_priv/pub, e2e_random.
+3. Отправить TUNNEL_BUILD с HopIndex=1.
+4. Ждать ACK'и от каждого ретранслятора + BUILD_OK от dest.
+5. conn.SetDeadline(time.Time{})  ← снять (сессия долгоживущая)
 ```
 
 **Ретранслятор** на `HopIndex = i`:
@@ -626,15 +727,22 @@ ExpiresAt = now + TTLSec
 ### 7.2. ReceiveFile
 
 ```
-1. OnFileHeader(header) → fileStore.Init(header)
+1. OnFileHeader(header):
+   a. safeName = SanitizeFileName(header.Name)
+   b. if error: Warn + return (передача отклонена)
+   c. header.Name = safeName
+   d. fileStore.Init(header)
 2. OnFileChunk(chunk):
    - AddChunk(chunk) → true/false (дедупликация)
    - если все chunks собраны → Complete(file_id)
-3. Reassemble(header, chunks, outPath):
-   - проверить SHA256 каждого chunk
-   - собрать в порядке chunk_idx
-   - проверить SHA256 всего файла
-   - записать на диск
+3. finalizeFile(transfer):
+   a. safeName = SanitizeFileName(transfer.Header.Name)  ← повторно
+   b. outPath = UniqueDestPath(outDir, safeName)  ← суффикс при коллизии
+   c. Reassemble(header, chunks, outPath):
+      - проверить SHA256 каждого chunk
+      - собрать в порядке chunk_idx
+      - проверить SHA256 всего файла
+      - записать на диск
 ```
 
 ### 7.3. Дедупликация
@@ -645,22 +753,57 @@ ExpiresAt = now + TTLSec
 
 **Best practice:** защита от повторов по сети (не от атакующего).
 
+### 7.4. `SanitizeFileName` — безопасность имени
+
+`internal/filetransfer/sanitize.go`:
+
+**`SanitizeFileName(name) (string, error)`** — отклоняет:
+
+- пустое имя;
+- absolute paths (`/etc/passwd`, `C:\Windows\...`, `\\server\...`);
+- path traversal (`../`, `..\`, `..`) — разделители пути запрещены;
+- NUL-байты (`\x00`);
+- control chars (< 0x20, 0x7f);
+- имена `.` и `..`;
+- длину > 255 байт;
+- Windows reserved (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`, `LPT1..9`).
+
+**Разрешены:** `payload.bin`, `my-file_v2.tar.gz`, `.hidden`,
+`файл.txt`, `file with spaces.txt`.
+
+**`UniqueDestPath(outDir, name) (string, error)`:**
+
+- проверяет, что итоговый путь лежит **внутри `outDir`** (защита от
+  обхода `SanitizeFileName`);
+- если файл существует — добавляет суффикс `.1`, `.2`, … до 100;
+- если > 100 коллизий — ошибка.
+
+**Где вызывается:**
+- `TunnelManager.OnFileHeader` — `SanitizeFileName` **до** `Init`
+  (отклоняет невалидные имена на входе);
+- `TunnelManager.finalizeFile` — повторная `SanitizeFileName` +
+  `UniqueDestPath` (defense in depth).
+
 ## 8. Subnet diversity в routing
 
 **Цель:** защита от Sybil-flooding — атакующий создаёт много
 узлов в одной /24 и заполняет k-bucket.
 
-**Правило:** в одном k-bucket — **не более `SubnetDiversityLimit=2`**
-контактов из одной /24.
+**Правило:** в одном k-bucket — **не более `SubnetDiversityLimit`**
+контактов из одной /24. `SubnetDiversityLimit` — **параметр конфига**
+(`-subnet-diversity-limit`, env `SUBNET_DIVERSITY_LIMIT`, YAML
+`subnet_diversity_limit`, default `2`, `0` = отключено, `>=K` =
+фактически отключено).
 
 **Логика `RoutingTable.Add`:**
 
 ```
 if c.NodeID не существующий:
-    newSubnet = subnetOfContact(c)
-    sameSubnet = count(existing с newSubnet)
-    if sameSubnet >= 2:
-        reject (subnet_diversity)
+    if rt.subnetLimit > 0:
+        newSubnet = subnetOfContact(c)
+        sameSubnet = count(existing с newSubnet)
+        if sameSubnet >= rt.subnetLimit:
+            reject (subnet_diversity)
 ```
 
 **`subnetOfContact(c)`:**
@@ -672,6 +815,11 @@ if c.NodeID не существующий:
 - иначе → "".
 
 **Исключение:** обновление существующего контакта — не блокируется.
+
+**Тесты:** `TestBucketFillsToK_SubnetDiversityDisabled` (0 → K),
+`TestBucketFillsToK_SubnetLimitEqualsK` (K → K),
+`TestBucketSubnetDiversityRejectsThird` (2 → 3-й отклонён),
+`TestSubnetDiversityLimitAccessors`.
 
 ## 9. Ключи DHT
 
@@ -698,8 +846,12 @@ key = SHA-256("alias:" || normalize(alias))
 
 **Expire:** раз в 30 секунд.
 
+**Refresh:** раз в `RefreshInterval` (default 60s, `-refresh-interval-ms`,
+env `REFRESH_INTERVAL_MS`, YAML `refresh_interval_ms`) — `LookupNode(self)`
+(стандартный Kademlia refresh).
+
 **Anti-rollback:** если у узла есть запись с `sequence_number=N`,
-приходит с `M < N` — отклоняется.
+приходит с `M < N` — отклоняется. `FindValue` — max(seq) среди реплик.
 
 ## 11. Bootstrap-схемы
 
@@ -720,6 +872,12 @@ key = SHA-256("alias:" || normalize(alias))
 Первые 3 узла — seeds. Узлы 4+ стартуют с
 `BOOTSTRAP_PEERS=["node-01:9001","node-02:9002","node-03:9003"]`.
 
+### 11.5. Ошибка bootstrap
+
+`Bootstrap` возвращает error, если после попыток присоединения к
+seed'ам routing-таблица **пустая** — явная сигнализация «не удалось
+присоединиться к сети».
+
 ## 12. Обработка ошибок
 
 | Код | Ситуация | Действие |
@@ -735,11 +893,15 @@ key = SHA-256("alias:" || normalize(alias))
 | `ErrHandshakeBadSignature` | невалидная подпись | Прервать handshake |
 | `ErrTooOld` (store) | `sequence_number` меньше | Отклонить запись |
 | `ErrValueNotFound` | `FIND_VALUE` не нашёл | Вернуть ошибку |
+| `ErrNotEnoughReplicas` | `Publish` < 2 реплик или нет кандидатов | Вернуть ошибку |
 | `ErrTunnelClosed` | туннель закрыт | Прекратить отправку |
 | `ErrTunnelNotActive` | туннель не ACTIVE | Отказать |
 | `ErrBuildFailed` | не удалось построить | Диагностика |
 | `ErrNoCandidates` | нет кандидатов | Диагностика |
 | `ErrTunnelExpired` | TTL истёк | Закрыть |
+| `ErrBootstrapEmpty` | Bootstrap: таблица пустая | Явная ошибка присоединения |
+| `ErrBadFileName` | `SanitizeFileName` отклоняет | Отклонить передачу файла |
+| `ErrPathEscapesOutDir` | `UniqueDestPath` — путь вне `outDir` | Отклонить передачу |
 
 ## 13. Коды ошибок (ERROR payload)
 
@@ -781,7 +943,7 @@ lookup'е видит Sybil'а **раньше** victim'а и **верит** ем�
 2. HANDSHAKE_HELLO { id, id_pub, eph_pub, rnd }
 3. HANDSHAKE_REPLY { id, id_pub, eph_pub, rnd, session_id, signature }
 4. HANDSHAKE_CONFIRM { signature }
-5. [SecureConn создан]
+5. [SecureConn создан; secure.SetDeadline(deadline)]
 6. PING { sender, timestamp_ms } — AEAD
 7. PONG { responder, ping_ts, resp_ts } — AEAD
 8. TCP close
@@ -793,9 +955,7 @@ lookup'е видит Sybil'а **раньше** victim'а и **верит** ем�
 Alice → R1 → R2 → Bob
 
 Alice:
-  TUNNEL_BUILD
-  ...
-  Tunnel ACTIVE
+  BuildCoordinator.Build(ctx, destID, path) → Tunnel ACTIVE
 
   InnerEnvelope{FILE_HEADER, header}  → TUNNEL_DATA
   InnerEnvelope{FILE_CHUNK, c0}       → TUNNEL_DATA
@@ -804,11 +964,13 @@ Alice:
   InnerEnvelope{FILE_CHUNK, c31}      → TUNNEL_DATA
 
 Bob (dest):
-  OnFileHeader(header) → Store.Init
+  OnFileHeader(header):
+    safeName = SanitizeFileName(header.Name)  # reject ../../etc/passwd
+    Store.Init(header)
   OnFileChunk(c0)      → Store.AddChunk
   OnFileChunk(c1)      → Store.AddChunk
   ...
   OnFileChunk(c31)     → Complete → Reassemble
-  file saved to /recv/payload.bin
-  sha256 verified
+    outPath = UniqueDestPath(outDir, safeName)  # payload.1.bin при коллизии
+    file saved, sha256 verified
 ```

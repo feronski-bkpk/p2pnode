@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -29,10 +30,16 @@ func TestLookup3Nodes(t *testing.T) {
 	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 
 	result := client.LookupNode(
+		context.Background(),
 		nodes[0].contact,
 		nodes[0].table,
 		target,
-		LookupConfig{Alpha: 3, K: 4, Timeout: 2 * time.Second},
+		LookupConfig{
+			Alpha:         3,
+			K:             4,
+			Timeout:       2 * time.Second,
+			LookupTimeout: 10 * time.Second,
+		},
 	)
 
 	if result.RPC < 2 {
@@ -57,10 +64,16 @@ func TestLookupTargetAlreadyKnown(t *testing.T) {
 	tr := tcp.New()
 	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 	result := client.LookupNode(
+		context.Background(),
 		nodes[0].contact,
 		nodes[0].table,
 		nodes[1].contact.NodeID,
-		LookupConfig{Alpha: 3, K: 4, Timeout: 1 * time.Second},
+		LookupConfig{
+			Alpha:         3,
+			K:             4,
+			Timeout:       1 * time.Second,
+			LookupTimeout: 5 * time.Second,
+		},
 	)
 	if len(result.Contacts) == 0 {
 		t.Fatal("empty result")
@@ -83,10 +96,16 @@ func TestLookupLogPopulated(t *testing.T) {
 	tr := tcp.New()
 	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 	result := client.LookupNode(
+		context.Background(),
 		nodes[0].contact,
 		nodes[0].table,
 		nodes[2].contact.NodeID,
-		LookupConfig{Alpha: 3, K: 4, Timeout: 2 * time.Second},
+		LookupConfig{
+			Alpha:         3,
+			K:             4,
+			Timeout:       2 * time.Second,
+			LookupTimeout: 10 * time.Second,
+		},
 	)
 
 	if result.Log.Target == "" {

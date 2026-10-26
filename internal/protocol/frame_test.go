@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math/rand"
 	"testing"
 )
 
@@ -160,5 +161,185 @@ func TestRequestIDPreserved(t *testing.T) {
 	}
 	if got.RequestID != rid {
 		t.Fatal("request_id mismatch")
+	}
+}
+
+type chunkedReader struct {
+	data     []byte
+	off      int
+	maxChunk int
+	rng      *rand.Rand
+}
+
+func newChunkedReader(data []byte, maxChunk int, rng *rand.Rand) *chunkedReader {
+	return &chunkedReader{data: data, maxChunk: maxChunk, rng: rng}
+}
+
+func (c *chunkedReader) Read(p []byte) (int, error) {
+	if c.off >= len(c.data) {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if c.maxChunk > 0 {
+		if n > c.maxChunk {
+			n = c.maxChunk
+		}
+	} else if n > 1 {
+		n = 1 + c.rng.Intn(n)
+	}
+	if n > len(c.data)-c.off {
+		n = len(c.data) - c.off
+	}
+	copy(p, c.data[c.off:c.off+n])
+	c.off += n
+	return n, nil
+}
+
+func encodeFrame(t *testing.T, f Frame) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if _, err := f.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestReadFrame_RandomChunkBoundaries(t *testing.T) {
+	f := Frame{
+		Version:   Version,
+		Type:      MsgFindNodeRequest,
+		Flags:     0,
+		RequestID: RequestID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		Payload:   bytes.Repeat([]byte{0xAB}, 257),
+	}
+	raw := encodeFrame(t, f)
+
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 2000; i++ {
+		r := newChunkedReader(raw, 0, rng)
+		got, err := ReadFrame(r)
+		if err != nil {
+			t.Fatalf("iter %d: ReadFrame: %v", i, err)
+		}
+		if got.Version != f.Version || got.Type != f.Type || got.Flags != f.Flags {
+			t.Fatalf("iter %d: header mismatch", i)
+		}
+		if got.RequestID != f.RequestID {
+			t.Fatalf("iter %d: request_id mismatch", i)
+		}
+		if !bytes.Equal(got.Payload, f.Payload) {
+			t.Fatalf("iter %d: payload mismatch", i)
+		}
+	}
+}
+
+func TestReadFrame_ChunkedSizes(t *testing.T) {
+	cases := []struct {
+		name     string
+		payload  int
+		maxChunk int
+	}{
+		{"1-byte chunks, empty payload", 0, 1},
+		{"1-byte chunks, small payload", 5, 1},
+		{"1-byte chunks, header-size payload", 24, 1},
+		{"header boundary -1 (23)", 100, 23},
+		{"header boundary exact (24)", 100, 24},
+		{"header boundary +1 (25)", 100, 25},
+		{"payload + header in one chunk", 100, 124},
+		{"max payload chunked by 7", MaxFramePayload, 7},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := Frame{
+				Version:   Version,
+				Type:      MsgPing,
+				RequestID: RequestID{9},
+				Payload:   bytes.Repeat([]byte{0xCD}, tc.payload),
+			}
+			raw := encodeFrame(t, f)
+			r := newChunkedReader(raw, tc.maxChunk, nil)
+			got, err := ReadFrame(r)
+			if err != nil {
+				t.Fatalf("ReadFrame: %v", err)
+			}
+			if got.Type != f.Type {
+				t.Fatalf("type mismatch: %v vs %v", got.Type, f.Type)
+			}
+			if !bytes.Equal(got.Payload, f.Payload) {
+				t.Fatalf("payload mismatch: len %d vs %d", len(got.Payload), len(f.Payload))
+			}
+			if _, err := ReadFrame(r); !errors.Is(err, io.EOF) {
+				t.Fatalf("expected EOF after frame, got %v", err)
+			}
+		})
+	}
+}
+
+func TestReadFrame_TwoFramesChunked(t *testing.T) {
+	f1 := Frame{Version: Version, Type: MsgPing, RequestID: RequestID{1}, Payload: []byte("first")}
+	f2 := Frame{Version: Version, Type: MsgPong, RequestID: RequestID{2}, Payload: []byte("second-frame")}
+	raw := append(encodeFrame(t, f1), encodeFrame(t, f2)...)
+
+	for _, maxChunk := range []int{1, 2, 7, 23, 24, 25, 50, 1000} {
+		r := newChunkedReader(raw, maxChunk, nil)
+		got1, err := ReadFrame(r)
+		if err != nil {
+			t.Fatalf("maxChunk=%d: first: %v", maxChunk, err)
+		}
+		got2, err := ReadFrame(r)
+		if err != nil {
+			t.Fatalf("maxChunk=%d: second: %v", maxChunk, err)
+		}
+		if !bytes.Equal(got1.Payload, f1.Payload) {
+			t.Fatalf("maxChunk=%d: first payload mismatch", maxChunk)
+		}
+		if !bytes.Equal(got2.Payload, f2.Payload) {
+			t.Fatalf("maxChunk=%d: second payload mismatch", maxChunk)
+		}
+		if _, err := ReadFrame(r); !errors.Is(err, io.EOF) {
+			t.Fatalf("maxChunk=%d: expected EOF after two frames, got %v", maxChunk, err)
+		}
+	}
+}
+
+type twoChunkEOFReader struct {
+	first, second []byte
+	stage         int
+}
+
+func (r *twoChunkEOFReader) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		n := copy(p, r.first)
+		if n < len(r.first) {
+			r.first = r.first[n:]
+			return n, nil
+		}
+		r.stage = 1
+		return n, nil
+	case 1:
+		n := copy(p, r.second)
+		if n < len(r.second) {
+			r.second = r.second[n:]
+			return n, nil
+		}
+		r.stage = 2
+		return n, io.EOF
+	default:
+		return 0, io.EOF
+	}
+}
+
+func TestReadFrame_EOFWithData(t *testing.T) {
+	f := Frame{Version: Version, Type: MsgPing, RequestID: RequestID{7}, Payload: []byte("x")}
+	raw := encodeFrame(t, f)
+	half := len(raw) / 2
+	r := &twoChunkEOFReader{first: raw[:half], second: raw[half:]}
+	got, err := ReadFrame(r)
+	if err != nil {
+		t.Fatalf("ReadFrame: %v", err)
+	}
+	if !bytes.Equal(got.Payload, f.Payload) {
+		t.Fatalf("payload mismatch")
 	}
 }

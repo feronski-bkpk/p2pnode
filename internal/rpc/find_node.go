@@ -1,8 +1,8 @@
 package rpc
 
 import (
+	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"p2pnode/internal/protocol"
@@ -10,7 +10,7 @@ import (
 	"p2pnode/internal/transport"
 )
 
-func (c *Client) FindNodeRPC(local routing.Contact, target routing.Contact, targetID routing.ID, timeout time.Duration) ([]routing.Contact, error) {
+func (c *Client) FindNodeRPC(ctx context.Context, local routing.Contact, target routing.Contact, targetID routing.ID, timeout time.Duration) ([]routing.Contact, error) {
 	req := protocol.FindNodeRequestPayload{
 		Sender:       local.ToProtocol(),
 		TargetNodeID: targetID,
@@ -20,7 +20,7 @@ func (c *Client) FindNodeRPC(local routing.Contact, target routing.Contact, targ
 		return nil, err
 	}
 
-	frame, err := c.Call(target.Addr(), protocol.MsgFindNodeRequest, protocol.MsgFindNodeResponse, payload, timeout)
+	frame, err := c.Call(ctx, target.Addr(), protocol.MsgFindNodeRequest, protocol.MsgFindNodeResponse, payload, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +70,9 @@ func HandleFindNode(
 ) error {
 	var req protocol.FindNodeRequestPayload
 	if err := protocol.Decode(frame.Payload, &req); err != nil {
-		return err
+		return writeFindNodeResp(conn, frame.RequestID, local, req.TargetNodeID, nil)
 	}
+
 	sender := routing.FromProtocol(req.Sender)
 	if err := sender.Validate(); err == nil {
 		sender.Touch()
@@ -81,61 +82,53 @@ func HandleFindNode(
 	target := routing.ID(req.TargetNodeID)
 
 	if sybil != nil && sybil.Enabled && sybil.Victim != "" {
-		if target.String() == sybil.Victim {
-			resp := protocol.FindNodeResponsePayload{
-				Responder:    local.ToProtocol(),
-				TargetNodeID: req.TargetNodeID,
-				Contacts:     []protocol.Contact{local.ToProtocol()},
-			}
-			payload, err := protocol.Encode(resp)
-			if err != nil {
-				return err
-			}
-			return conn.WriteFrame(protocol.Frame{
-				Version:   protocol.Version,
-				Type:      protocol.MsgFindNodeResponse,
-				RequestID: frame.RequestID,
-				Payload:   payload,
-			})
+		victim, err := routing.IDFromHex(sybil.Victim)
+		if err == nil && target == victim {
+			return writeFindNodeResp(conn, frame.RequestID, local, req.TargetNodeID,
+				[]routing.Contact{local})
 		}
 	}
 
 	closest := table.Closest(target, table.K())
-
-	all := make([]routing.Contact, 0, len(closest)+1)
-	all = append(all, local)
-	all = append(all, closest...)
-
-	sort.Slice(all, func(i, j int) bool {
-		return routing.CloserTo(target, all[i].NodeID, all[j].NodeID)
-	})
-
-	seen := make(map[routing.ID]bool, len(all))
-	contacts := make([]protocol.Contact, 0, table.K())
-	for _, c := range all {
-		if seen[c.NodeID] {
+	contacts := make([]routing.Contact, 0, len(closest))
+	for _, c := range closest {
+		if c.NodeID == local.NodeID {
 			continue
 		}
-		seen[c.NodeID] = true
-		contacts = append(contacts, c.ToProtocol())
-		if len(contacts) >= table.K() {
-			break
-		}
+		contacts = append(contacts, c)
+	}
+	if len(contacts) > table.K() {
+		contacts = contacts[:table.K()]
 	}
 
-	resp := protocol.FindNodeResponsePayload{
+	return writeFindNodeResp(conn, frame.RequestID, local, req.TargetNodeID, contacts)
+}
+
+func writeFindNodeResp(
+	conn transport.Conn,
+	reqID protocol.RequestID,
+	local routing.Contact,
+	target [32]byte,
+	contacts []routing.Contact,
+) error {
+	protos := make([]protocol.Contact, 0, len(contacts))
+	for _, c := range contacts {
+		protos = append(protos, c.ToProtocol())
+	}
+
+	payload, err := protocol.Encode(protocol.FindNodeResponsePayload{
 		Responder:    local.ToProtocol(),
-		TargetNodeID: req.TargetNodeID,
-		Contacts:     contacts,
-	}
-	payload, err := protocol.Encode(resp)
+		TargetNodeID: target,
+		Contacts:     protos,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("rpc: encode find_node response: %w", err)
 	}
+
 	return conn.WriteFrame(protocol.Frame{
 		Version:   protocol.Version,
 		Type:      protocol.MsgFindNodeResponse,
-		RequestID: frame.RequestID,
+		RequestID: reqID,
 		Payload:   payload,
 	})
 }

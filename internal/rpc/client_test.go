@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
@@ -102,7 +103,7 @@ func TestPingRoundTrip(t *testing.T) {
 	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 
 	expected := nodes[1].contact.NodeID
-	responder, err := client.Ping(nodes[0].contact, nodes[1].contact.Addr(), &expected, 2*time.Second)
+	responder, err := client.Ping(context.Background(), nodes[0].contact, nodes[1].contact.Addr(), &expected, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestPingTimeout(t *testing.T) {
 	tr := tcp.New()
 	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 
-	_, err := client.Ping(nodes[0].contact, "127.0.0.1:1", nil, 300*time.Millisecond)
+	_, err := client.Ping(context.Background(), nodes[0].contact, "127.0.0.1:1", nil, 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("Ping to dead address should fail")
 	}
@@ -127,7 +128,7 @@ func TestPingWithoutExpectedID(t *testing.T) {
 	tr := tcp.New()
 	client := NewClient(tr, discardLog(), nil, testIdentity(t))
 
-	responder, err := client.Ping(nodes[0].contact, nodes[1].contact.Addr(), nil, 2*time.Second)
+	responder, err := client.Ping(context.Background(), nodes[0].contact, nodes[1].contact.Addr(), nil, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
 	}

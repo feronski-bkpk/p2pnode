@@ -5,15 +5,18 @@ import (
 	"time"
 
 	"p2pnode/internal/record"
+	"p2pnode/internal/rpc"
 )
 
 const (
 	ExpireInterval = 30 * time.Second
 
 	RepublishInterval = DefaultRecordTTL / 2
+
+	RefreshInterval = 60 * time.Second
 )
 
-func (n *Node) StartBackgroundTasks() {
+func (n *Node) StartBackgroundTasks(ctx context.Context) {
 	if n.bgCtx != nil {
 		return
 	}
@@ -24,12 +27,15 @@ func (n *Node) StartBackgroundTasks() {
 	if n.RepublishInterval <= 0 {
 		n.RepublishInterval = RepublishInterval
 	}
+	if n.RefreshInterval <= 0 {
+		n.RefreshInterval = RefreshInterval
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	n.bgCtx = ctx
 	n.bgCancel = cancel
 
-	n.bgWG.Add(2)
+	n.bgWG.Add(3)
 	go func() {
 		defer n.bgWG.Done()
 		n.runExpireLoop(ctx)
@@ -38,10 +44,15 @@ func (n *Node) StartBackgroundTasks() {
 		defer n.bgWG.Done()
 		n.runRepublishLoop(ctx)
 	}()
+	go func() {
+		defer n.bgWG.Done()
+		n.runRefreshLoop(ctx)
+	}()
 
 	n.Log.Info("background tasks started",
 		"expire_interval_sec", n.ExpireInterval.Seconds(),
 		"republish_interval_sec", n.RepublishInterval.Seconds(),
+		"refresh_interval_sec", n.RefreshInterval.Seconds(),
 	)
 }
 
@@ -154,4 +165,43 @@ func (n *Node) republishOwnRecords(ctx context.Context) {
 			"count": count,
 		})
 	}
+}
+
+func (n *Node) runRefreshLoop(ctx context.Context) {
+	ticker := time.NewTicker(n.RefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n.refreshTable(ctx)
+		}
+	}
+}
+
+func (n *Node) refreshTable(ctx context.Context) {
+	if n.Table.Size() == 0 {
+		return
+	}
+	start := time.Now()
+	result := n.Client.LookupNode(ctx, n.Local, n.Table, n.Identity.NodeID, rpc.LookupConfig{
+		Alpha:         n.Config.Alpha,
+		K:             n.Config.KBucketSize,
+		Timeout:       n.Config.RPCTimeout,
+		LookupTimeout: n.Config.LookupTimeout,
+	})
+	n.Log.Info("refresh: done",
+		"rpc", result.RPC,
+		"iterations", result.Iterations,
+		"table_size", n.Table.Size(),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	n.Events.Log("refresh", map[string]any{
+		"rpc":         result.RPC,
+		"iterations":  result.Iterations,
+		"table_size":  n.Table.Size(),
+		"duration_ms": time.Since(start).Milliseconds(),
+	})
 }

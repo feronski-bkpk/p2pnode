@@ -177,8 +177,8 @@ func (m *TunnelManager) SetHandlers(hc *HandlerConfig) {
 	m.handlers = hc
 }
 
-func (m *TunnelManager) Build(destID [32]byte) (*Session, error) {
-	sess, err := m.buildInternal(destID, nil)
+func (m *TunnelManager) Build(ctx context.Context, destID [32]byte) (*Session, error) {
+	sess, err := m.buildInternal(ctx, destID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -188,12 +188,12 @@ func (m *TunnelManager) Build(destID [32]byte) (*Session, error) {
 	return sess, nil
 }
 
-func (m *TunnelManager) buildInternal(destID [32]byte, exclude [][32]byte) (*Session, error) {
+func (m *TunnelManager) buildInternal(ctx context.Context, destID [32]byte, exclude [][32]byte) (*Session, error) {
 	if m.RouteBuilder != nil && m.RouteBuilder.Log == nil {
 		m.RouteBuilder.Log = m.Log
 	}
 
-	path, err := m.RouteBuilder.Build(destID, exclude)
+	path, err := m.RouteBuilder.Build(ctx, destID, exclude)
 	if err != nil {
 		m.statsMu.Lock()
 		m.buildsFail++
@@ -228,7 +228,7 @@ func (m *TunnelManager) buildInternal(destID [32]byte, exclude [][32]byte) (*Ses
 		Log: m.Log,
 	}
 
-	res, err := bc.Build(destID, path)
+	res, err := bc.Build(ctx, destID, path)
 	if err != nil {
 		m.statsMu.Lock()
 		m.buildsFail++
@@ -290,20 +290,20 @@ func (m *TunnelManager) buildInternal(destID [32]byte, exclude [][32]byte) (*Ses
 	return sess, nil
 }
 
-func (m *TunnelManager) BuildPool(destID [32]byte) ([]*Session, error) {
+func (m *TunnelManager) BuildPool(ctx context.Context, destID [32]byte) ([]*Session, error) {
 	sessions := make([]*Session, 0, m.PoolSize)
 	var exclude [][32]byte
 	var lastErr error
 
 	for i := 0; i < m.PoolSize; i++ {
-		s, err := m.buildInternal(destID, exclude)
+		s, err := m.buildInternal(ctx, destID, exclude)
 		if err != nil {
 			m.Log.Info("tunnel: pool build without exclude (retry)",
 				"dest", fmt.Sprintf("%x", destID[:4]),
 				"attempt", i,
 				"excluded", len(exclude),
 				"err", err)
-			s, err = m.buildInternal(destID, nil)
+			s, err = m.buildInternal(ctx, destID, nil)
 			if err != nil {
 				lastErr = err
 				m.Log.Warn("tunnel: pool build partial",
@@ -350,7 +350,7 @@ func (m *TunnelManager) BuildPool(destID [32]byte) ([]*Session, error) {
 	return sessions, nil
 }
 
-func (m *TunnelManager) GetOrBuild(destID [32]byte) (*Session, error) {
+func (m *TunnelManager) GetOrBuild(ctx context.Context, destID [32]byte) (*Session, error) {
 	m.mu.RLock()
 	last := m.lastSession[destID]
 	pool := m.pools[destID]
@@ -364,10 +364,10 @@ func (m *TunnelManager) GetOrBuild(destID [32]byte) (*Session, error) {
 			return s, nil
 		}
 	}
-	return m.Build(destID)
+	return m.Build(ctx, destID)
 }
 
-func (m *TunnelManager) SendMessage(destID [32]byte, text string) (MessageID, error) {
+func (m *TunnelManager) SendMessage(ctx context.Context, destID [32]byte, text string) (MessageID, error) {
 	msgID, err := NewMessageID()
 	if err != nil {
 		return MessageID{}, err
@@ -384,7 +384,7 @@ func (m *TunnelManager) SendMessage(destID [32]byte, text string) (MessageID, er
 	var lastErr error
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		sess, err := m.pickSession(destID, attempt)
+		sess, err := m.pickSession(ctx, destID, attempt)
 		if err != nil {
 			lastErr = err
 			m.Log.Warn("tunnel: pick session failed",
@@ -460,7 +460,7 @@ func (m *TunnelManager) SendMessage(destID [32]byte, text string) (MessageID, er
 	return msgID, fmt.Errorf("tunnel: send failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
-func (m *TunnelManager) pickSession(destID [32]byte, attempt int) (*Session, error) {
+func (m *TunnelManager) pickSession(ctx context.Context, destID [32]byte, attempt int) (*Session, error) {
 	m.mu.RLock()
 	pool := m.pools[destID]
 	last := m.lastSession[destID]
@@ -476,14 +476,14 @@ func (m *TunnelManager) pickSession(destID [32]byte, attempt int) (*Session, err
 		if attempt < len(alive) {
 			return alive[attempt], nil
 		}
-		return m.Build(destID)
+		return m.Build(ctx, destID)
 	}
 
 	if attempt == 0 && last != nil &&
 		last.Tunnel.State().CanSend() && !last.IsClosed() {
 		return last, nil
 	}
-	return m.Build(destID)
+	return m.Build(ctx, destID)
 }
 
 func (m *TunnelManager) Close() {
@@ -680,6 +680,17 @@ func (m *TunnelManager) OnFileHeader(h *filetransfer.Header) {
 			"file_id", h.FileID.Short())
 		return
 	}
+
+	safeName, err := filetransfer.SanitizeFileName(h.Name)
+	if err != nil {
+		m.Log.Warn("tunnel: rejected file header (bad name)",
+			"file_id", h.FileID.Short(),
+			"name", h.Name,
+			"err", err)
+		return
+	}
+	h.Name = safeName
+
 	m.fileStore.Init(h)
 	m.Log.Info("tunnel: file header received",
 		"file_id", h.FileID.Short(),
@@ -723,12 +734,30 @@ func (m *TunnelManager) finalizeFile(t *filetransfer.InProgressTransfer) {
 	}
 	close(chunkCh)
 
-	outPath := outDir + "/" + t.Header.Name
+	safeName, err := filetransfer.SanitizeFileName(t.Header.Name)
+	if err != nil {
+		m.Log.Error("tunnel: reject file (bad name at finalize)",
+			"file_id", t.Header.FileID.Short(),
+			"name", t.Header.Name,
+			"err", err)
+		return
+	}
+
+	outPath, err := filetransfer.UniqueDestPath(outDir, safeName)
+	if err != nil {
+		m.Log.Error("tunnel: unique dest path failed",
+			"file_id", t.Header.FileID.Short(),
+			"name", safeName,
+			"err", err)
+		return
+	}
+
 	sha, err := filetransfer.Reassemble(t.Header, chunkCh, outPath)
 	if err != nil {
 		m.Log.Error("tunnel: reassemble file",
 			"file_id", t.Header.FileID.Short(),
-			"name", t.Header.Name,
+			"name", safeName,
+			"path", outPath,
 			"err", err)
 		return
 	}
@@ -759,7 +788,7 @@ func (a *sessionSenderAdapter) SendChunk(
 	destID [32]byte,
 	envelope []byte,
 ) error {
-	sess, err := a.mgr.pickSession(destID, 0)
+	sess, err := a.mgr.pickSession(ctx, destID, 0)
 	if err != nil {
 		return fmt.Errorf("tunnel: pick session: %w", err)
 	}

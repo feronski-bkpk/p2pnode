@@ -3,6 +3,7 @@ package transport
 import (
 	"errors"
 	"io"
+	"time"
 
 	"p2pnode/internal/protocol"
 )
@@ -15,6 +16,12 @@ type Conn interface {
 	RemoteAddr() string
 
 	Close() error
+
+	SetDeadline(t time.Time) error
+
+	SetReadDeadline(t time.Time) error
+
+	SetWriteDeadline(t time.Time) error
 }
 
 type Listener interface {

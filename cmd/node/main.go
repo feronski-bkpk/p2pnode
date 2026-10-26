@@ -59,17 +59,22 @@ func main() {
 		)
 	})
 
+	rootCtx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	if !cfg.NoServe {
 		n.Start()
 	}
 
-	if err := n.Bootstrap(); err != nil {
-		log.Warn("bootstrap error", "err", err)
-	}
-	log.Info("bootstrap complete", "table_size", n.Table.Size())
-
 	if !cfg.NoServe {
-		n.StartBackgroundTasks()
+		n.StartBackgroundTasks(rootCtx)
+	}
+
+	if err := n.Bootstrap(); err != nil {
+		log.Error("bootstrap failed", "err", err, "table_size", n.Table.Size())
+	} else {
+		log.Info("bootstrap complete", "table_size", n.Table.Size())
 	}
 
 	if cfg.PublishWaitMs > 0 && (cfg.PublishSelf || cfg.PublishAlias != "") {
@@ -97,7 +102,7 @@ func main() {
 	}
 
 	if cfg.ExportDir != "" {
-		if err := exportMetrics(cfg, n, log); err != nil {
+		if err := exportMetrics(rootCtx, cfg, n, log); err != nil {
 			log.Error("export metrics", "err", err)
 		}
 	}
@@ -109,7 +114,7 @@ func main() {
 	}
 
 	if cfg.RecvFileDir != "" {
-		if err := n.StartFileReceiver(context.Background(), cfg.RecvFileDir); err != nil {
+		if err := n.StartFileReceiver(rootCtx, cfg.RecvFileDir); err != nil {
 			log.Error("start file receiver", "err", err)
 		}
 	}
@@ -174,10 +179,7 @@ func main() {
 		return
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-	<-ctx.Done()
+	<-rootCtx.Done()
 
 	log.Info("shutting down")
 	close(stopCh)
@@ -335,7 +337,7 @@ func sendFileCmd(cfg config.Config, n *node.Node, log *slog.Logger) error {
 	return nil
 }
 
-func exportMetrics(cfg config.Config, n *node.Node, log *slog.Logger) error {
+func exportMetrics(rootCtx context.Context, cfg config.Config, n *node.Node, log *slog.Logger) error {
 	exp, err := metrics.NewExporter(cfg.ExportDir)
 	if err != nil {
 		return err
@@ -393,13 +395,15 @@ func exportMetrics(cfg config.Config, n *node.Node, log *slog.Logger) error {
 			}
 		} else {
 			res := n.Client.LookupNode(
+				rootCtx,
 				n.Local,
 				n.Table,
 				targetID,
 				rpc.LookupConfig{
-					Alpha:   cfg.Alpha,
-					K:       cfg.KBucketSize,
-					Timeout: cfg.PingTimeout,
+					Alpha:         cfg.Alpha,
+					K:             cfg.KBucketSize,
+					Timeout:       cfg.RPCTimeout,
+					LookupTimeout: cfg.LookupTimeout,
 				},
 			)
 			path, err := exp.ExportLookupWithTimestamp(res, !presentBefore)

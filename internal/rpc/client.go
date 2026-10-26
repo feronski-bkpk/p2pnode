@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -25,16 +26,29 @@ func NewClient(tr transport.Transport, log *slog.Logger, ev *events.Logger, loca
 }
 
 func (c *Client) Call(
+	ctx context.Context,
 	addr string,
 	reqType, respType protocol.MsgType,
 	payload []byte,
 	timeout time.Duration,
 ) (protocol.Frame, error) {
-	secure, err := c.Handshake(addr, nil)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return protocol.Frame{}, errors.New("rpc: call: context has no deadline")
+	}
+
+	secure, err := c.Handshake(ctx, addr, nil)
 	if err != nil {
 		return protocol.Frame{}, fmt.Errorf("rpc: handshake: %w", err)
 	}
 	defer secure.Close()
+
+	if err := secure.SetDeadline(deadline); err != nil {
+		return protocol.Frame{}, fmt.Errorf("rpc: set deadline: %w", err)
+	}
 
 	reqID, err := newRequestID()
 	if err != nil {
@@ -57,41 +71,24 @@ func (c *Client) Call(
 		return protocol.Frame{}, fmt.Errorf("rpc: write: %w", err)
 	}
 
-	type result struct {
-		f   protocol.Frame
-		err error
+	f, err := secure.ReadFrame()
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("rpc: read: %w", err)
 	}
-	ch := make(chan result, 1)
-	go func() {
-		f, err := secure.ReadFrame()
-		ch <- result{f, err}
-	}()
 
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			return protocol.Frame{}, fmt.Errorf("rpc: read: %w", r.err)
-		}
-		c.ev.LogPeer("frame_recv", "", addr, map[string]any{
-			"type":       r.f.Type.String(),
-			"request_id": r.f.RequestID.String(),
-			"size":       len(r.f.Payload),
-			"encrypted":  true,
-		})
-		if r.f.Type != respType {
-			return protocol.Frame{}, fmt.Errorf("rpc: unexpected response type %v, want %v",
-				r.f.Type, respType)
-		}
-		if r.f.RequestID != reqID {
-			return protocol.Frame{}, fmt.Errorf("%w: got %s, want %s",
-				ErrRequestIDMismatch, r.f.RequestID, reqID)
-		}
-		return r.f, nil
-
-	case <-time.After(timeout):
-		_ = secure.Close()
-		return protocol.Frame{}, transport.ErrTimeout
+	c.ev.LogPeer("frame_recv", "", addr, map[string]any{
+		"type":       f.Type.String(),
+		"request_id": f.RequestID.String(),
+		"size":       len(f.Payload),
+		"encrypted":  true,
+	})
+	if f.Type != respType {
+		return protocol.Frame{}, fmt.Errorf("rpc: unexpected response type %v, want %v", f.Type, respType)
 	}
+	if f.RequestID != reqID {
+		return protocol.Frame{}, fmt.Errorf("%w: got %s, want %s", ErrRequestIDMismatch, f.RequestID, reqID)
+	}
+	return f, nil
 }
 
 var ErrRequestIDMismatch = errors.New("rpc: request_id mismatch")

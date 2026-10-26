@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
@@ -47,6 +48,16 @@ func makeContactAt(t *testing.T, host string, port uint16) Contact {
 	}
 	c.NodeID = IDFromBytes(pub)
 	return c
+}
+
+func makeContactInBucket(t *testing.T, host string, port uint16) Contact {
+	t.Helper()
+	for {
+		c := makeContactAt(t, host, port)
+		if c.NodeID[0] >= 0x80 {
+			return c
+		}
+	}
 }
 
 func TestBucketIndex(t *testing.T) {
@@ -140,40 +151,16 @@ func TestAddRejectsSameIDDifferentKey(t *testing.T) {
 }
 
 func TestBucketFull_LiveHeadNotEvicted(t *testing.T) {
-	self := randomID(t)
 	k := 3
-	rt := NewRoutingTable(self, k)
+	var zero ID
+	rt := NewRoutingTable(zero, k)
 	chk := newChecker(true)
 
-	var contacts []Contact
-	for i := 0; i < k; i++ {
-		c := makeContactAt(t, "127.0.0.1", uint16(9100+i))
-		c.NodeID[0] = 0x80
-		c.NodeID[1] = byte(i + 1)
-		_ = c
-	}
-	_ = contacts
-
 	var sameBucket []Contact
-	for len(sameBucket) < k+1 {
-		pub, _, _ := ed25519.GenerateKey(rand.Reader)
-		id := ID(pub)
-		_ = id
-		realID := IDFromBytes(pub)
-		if realID[0] >= 0x80 {
-			c := Contact{
-				NodeID:            realID,
-				IdentityAlgorithm: "ed25519",
-				IdentityPublicKey: pub,
-				Host:              "127.0.0.1",
-				Port:              uint16(9200 + len(sameBucket)),
-			}
-			sameBucket = append(sameBucket, c)
-		}
+	for i := 0; i < k+1; i++ {
+		c := makeContactInBucket(t, "127.0.0.1", uint16(9200+i))
+		sameBucket = append(sameBucket, c)
 	}
-
-	var zero ID
-	rt = NewRoutingTable(zero, k)
 
 	for i := 0; i < k; i++ {
 		if !rt.Add(sameBucket[i], chk) {
@@ -201,26 +188,15 @@ func TestBucketFull_LiveHeadNotEvicted(t *testing.T) {
 
 func TestBucketFull_DeadHeadEvicted(t *testing.T) {
 	k := 3
-
-	var sameBucket []Contact
-	for len(sameBucket) < k+1 {
-		pub, _, _ := ed25519.GenerateKey(rand.Reader)
-		realID := IDFromBytes(pub)
-		if realID[0] >= 0x80 {
-			c := Contact{
-				NodeID:            realID,
-				IdentityAlgorithm: "ed25519",
-				IdentityPublicKey: pub,
-				Host:              "127.0.0.1",
-				Port:              uint16(9300 + len(sameBucket)),
-			}
-			sameBucket = append(sameBucket, c)
-		}
-	}
-
 	var zero ID
 	rt := NewRoutingTable(zero, k)
 	chk := newChecker(true)
+
+	var sameBucket []Contact
+	for i := 0; i < k+1; i++ {
+		c := makeContactInBucket(t, "127.0.0.1", uint16(9300+i))
+		sameBucket = append(sameBucket, c)
+	}
 
 	for i := 0; i < k; i++ {
 		rt.Add(sameBucket[i], chk)
@@ -326,5 +302,164 @@ func TestSnapshotBuckets(t *testing.T) {
 	}
 	if total != rt.Size() {
 		t.Fatalf("snapshot total %d != size %d", total, rt.Size())
+	}
+}
+
+func TestRemoveIfDead(t *testing.T) {
+	self := randomID(t)
+	rt := NewRoutingTable(self, 4)
+	chk := newChecker(true)
+	rt.SetLivenessChecker(chk)
+
+	c := makeContactAt(t, "127.0.0.1", 9101)
+	rt.Add(c, nil)
+
+	ctx := context.Background()
+
+	if rt.RemoveIfDead(ctx, c.NodeID) {
+		t.Fatal("live contact must not be removed")
+	}
+	if _, ok := rt.Get(c.NodeID); !ok {
+		t.Fatal("live contact should still be present")
+	}
+
+	chk.Set(c.NodeID, false)
+	if !rt.RemoveIfDead(ctx, c.NodeID) {
+		t.Fatal("dead contact must be removed")
+	}
+	if _, ok := rt.Get(c.NodeID); ok {
+		t.Fatal("dead contact should be gone")
+	}
+}
+
+func TestAddUsesTableLivenessChecker(t *testing.T) {
+	k := 3
+	var zero ID
+	rt := NewRoutingTable(zero, k)
+	chk := newChecker(true)
+	rt.SetLivenessChecker(chk)
+
+	var sameBucket []Contact
+	for i := 0; i < k+1; i++ {
+		c := makeContactInBucket(t, "127.0.0.1", uint16(9400+i))
+		sameBucket = append(sameBucket, c)
+	}
+
+	for i := 0; i < k; i++ {
+		if !rt.Add(sameBucket[i], nil) {
+			t.Fatalf("Add %d failed", i)
+		}
+	}
+
+	if rt.Add(sameBucket[k], nil) {
+		t.Fatal("Add should return false: live head not evicted (via rt.liveness)")
+	}
+
+	b := rt.buckets[bucketIndex(rt.self, sameBucket[0].NodeID)]
+	head, ok := b.head()
+	if !ok {
+		t.Fatal("bucket empty")
+	}
+	chk.Set(head.NodeID, false)
+
+	if !rt.Add(sameBucket[k], nil) {
+		t.Fatalf("Add should return true: dead head %s evicted (via rt.liveness)",
+			head.NodeID.Short())
+	}
+	if _, ok := rt.Get(head.NodeID); ok {
+		t.Fatal("dead head should be gone")
+	}
+	if _, ok := rt.Get(sameBucket[k].NodeID); !ok {
+		t.Fatal("new contact should be present")
+	}
+}
+
+func TestBucketFillsToK_SubnetDiversityDisabled(t *testing.T) {
+	k := 4
+	var zero ID
+	rt := NewRoutingTable(zero, k)
+	rt.SetSubnetDiversityLimit(0)
+
+	var sameBucket []Contact
+	for i := 0; i < k; i++ {
+		host := fmt.Sprintf("node-%02d", i+1)
+		c := makeContactInBucket(t, host, uint16(9500+i))
+		sameBucket = append(sameBucket, c)
+	}
+
+	for i, c := range sameBucket {
+		if !rt.Add(c, nil) {
+			t.Fatalf("Add %d failed (subnet diversity should be off)", i)
+		}
+	}
+	if rt.Size() != k {
+		t.Fatalf("size: got %d, want %d (bucket should fill to K)", rt.Size(), k)
+	}
+	t.Logf("OK: bucket filled to %d (subnet diversity off)", rt.Size())
+}
+
+func TestBucketFillsToK_SubnetLimitEqualsK(t *testing.T) {
+	k := 4
+	var zero ID
+	rt := NewRoutingTable(zero, k)
+	rt.SetSubnetDiversityLimit(k)
+
+	var sameBucket []Contact
+	for i := 0; i < k; i++ {
+		host := fmt.Sprintf("node-%02d", i+1)
+		c := makeContactInBucket(t, host, uint16(9600+i))
+		sameBucket = append(sameBucket, c)
+	}
+
+	for i, c := range sameBucket {
+		if !rt.Add(c, nil) {
+			t.Fatalf("Add %d failed (limit=K should allow same subnet)", i)
+		}
+	}
+	if rt.Size() != k {
+		t.Fatalf("size: got %d, want %d", rt.Size(), k)
+	}
+	t.Logf("OK: bucket filled to %d with limit=K", rt.Size())
+}
+
+func TestBucketSubnetDiversityRejectsThird(t *testing.T) {
+	k := 4
+	var zero ID
+	rt := NewRoutingTable(zero, k)
+	rt.SetSubnetDiversityLimit(2)
+
+	var sameZone []Contact
+	for i := 0; i < 3; i++ {
+		host := fmt.Sprintf("node-%02d", i+1)
+		c := makeContactInBucket(t, host, uint16(9700+i))
+		sameZone = append(sameZone, c)
+	}
+
+	for i := 0; i < 2; i++ {
+		if !rt.Add(sameZone[i], nil) {
+			t.Fatalf("Add %d failed", i)
+		}
+	}
+	if rt.Add(sameZone[2], nil) {
+		t.Fatal("third contact from same subnet should be rejected (limit=2)")
+	}
+	if rt.Size() != 2 {
+		t.Fatalf("size: got %d, want 2", rt.Size())
+	}
+}
+
+func TestSubnetDiversityLimitAccessors(t *testing.T) {
+	var zero ID
+	rt := NewRoutingTable(zero, 4)
+	if got := rt.SubnetDiversityLimit(); got != 2 {
+		t.Fatalf("default limit: got %d, want 2", got)
+	}
+	rt.SetSubnetDiversityLimit(0)
+	if got := rt.SubnetDiversityLimit(); got != 0 {
+		t.Fatalf("after set 0: got %d, want 0", got)
+	}
+	rt.SetSubnetDiversityLimit(5)
+	if got := rt.SubnetDiversityLimit(); got != 5 {
+		t.Fatalf("after set 5: got %d, want 5", got)
 	}
 }

@@ -136,7 +136,14 @@ func ReceiveFile(
 		"size", header.TotalSize,
 		"chunks", header.TotalChunks)
 
-	outPath := outDir + "/" + header.Name
+	safeName, err := SanitizeFileName(header.Name)
+	if err != nil {
+		return "", "", fmt.Errorf("filetransfer: bad name: %w", err)
+	}
+	outPath, err := UniqueDestPath(outDir, safeName)
+	if err != nil {
+		return "", "", err
+	}
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()

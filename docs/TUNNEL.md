@@ -60,6 +60,15 @@ Alice                  R1                  R2                  R3               
   │  E2ESession         │ {prev,next,ttl}   │ {prev,next,ttl}   │ {prev,next,ttl}   │  {e2e,ttl}
 ```
 
+1. `ctx, cancel := context.WithTimeout(ctx, bc.BuildTimeout)`.
+2. `deadline := ctx.Deadline()`.
+3. `conn := bc.Dial(relay1)`.
+4. `conn.SetDeadline(deadline)` — **покрывает write BUILD + чтение
+   всех ACK + BUILD_OK**.
+5. Цикл чтения: `conn.ReadFrame()` (без `time.After` + goroutine).
+6. После успешного build — `conn.SetDeadline(time.Time{})`
+   (сессия долгоживущая).
+
 ### 2.3. Состояния туннеля
 
 ```
@@ -210,11 +219,64 @@ Alice → [InnerEnvelope{FILE_CHUNK, cN}]      → TUNNEL_DATA → R1 → R2 →
 **Best practice:** защита от повторов (например, если ACK
 потерялся и Alice отправил чанк повторно).
 
-### 6.4. Формат
+### 6.4. Безопасность имени файла
+
+**Проблема:** `Header.Name` приходит от отправителя (через
+`TUNNEL_DATA` → `InnerEnvelope` → `FILE_HEADER`). Без проверки —
+возможен path traversal (`../../etc/passwd`), абсолютный путь
+(`/tmp/evil`), null-байты, Windows reserved (`CON`, `NUL`, …).
+
+**Решение:** `internal/filetransfer/sanitize.go`:
+
+**`SanitizeFileName(name) (string, error)`** — отклоняет:
+
+- пустое имя;
+- absolute paths (`/etc/passwd`, `C:\Windows\...`, `\\server\...`);
+- path traversal (`../`, `..\`, `..`) — разделители пути запрещены;
+- NUL-байты (`\x00`);
+- control chars (< 0x20, 0x7f);
+- имена `.` и `..`;
+- длину > 255 байт;
+- Windows reserved (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`, `LPT1..9`).
+
+**Разрешены:** `payload.bin`, `my-file_v2.tar.gz`, `.hidden`,
+`файл.txt`, `file with spaces.txt`.
+
+**`UniqueDestPath(outDir, name) (string, error)`:**
+
+- проверяет, что итоговый путь лежит **внутри `outDir`** (защита
+  от обхода `SanitizeFileName`);
+- если файл существует — добавляет суффикс `.1`, `.2`, … до 100;
+- если > 100 коллизий — ошибка.
+
+**Где вызывается:**
+
+- `TunnelManager.OnFileHeader` — `SanitizeFileName` **до** `Init`;
+  отклонение → `Warn`, передача **не** запускается;
+- `TunnelManager.finalizeFile` — повторная `SanitizeFileName` +
+  `UniqueDestPath` (defense in depth); `filepath.Join` вместо
+  конкатенации.
+
+**Тесты:** `TestSanitizeFileName_OK`, `TestSanitizeFileName_Reject`
+(20 кейсов), `TestUniqueDestPath_NoCollision`,
+`TestUniqueDestPath_SuffixOnCollision`, `TestUniqueDestPath_NoExtension`,
+`TestUniqueDestPath_EscapesOutDir`.
+
+**Пример:**
+
+```bash
+# Злонамеренный FILE_HEADER { Name: "../../etc/passwd" }
+# → OnFileHeader: SanitizeFileName → error → Warn + return (передача отклонена)
+
+# Первый payload.bin → /recv/payload.bin
+# Второй payload.bin → /recv/payload.1.bin (суффикс)
+```
+
+### 6.5. Формат
 
 См. `docs/PROTOCOL.md` раздел 3.4.
 
-### 6.5. CLI
+### 6.6. CLI
 
 | Флаг | Env | Default | Назначение |
 |------|-----|---------|------------|
@@ -223,7 +285,7 @@ Alice → [InnerEnvelope{FILE_CHUNK, cN}]      → TUNNEL_DATA → R1 → R2 →
 | `-file-chunk-size` | `FILE_CHUNK_SIZE` | `32768` | Размер чанка |
 | `-file-max-size` | `FILE_MAX_SIZE` | `104857600` | Макс. размер (100 МиБ) |
 
-### 6.6. Демонстрация
+### 6.7. Демонстрация
 
 ```bash
 # N=5 узлов, max-hops=2, файл 1 МБ
@@ -242,19 +304,20 @@ Alice → [InnerEnvelope{FILE_CHUNK, cN}]      → TUNNEL_DATA → R1 → R2 →
 - ✅ ACK на каждый чанк;
 - ✅ SHA-256 совпадает (побайтовое сравнение);
 - ✅ дедупликация (`TestStore_Dedup`);
-- ✅ **E2E сохраняется** (`relay logs` не содержат plaintext).
+- ✅ **E2E сохраняется** (`relay logs` не содержат plaintext);
+- ✅ **безопасность имени** (`SanitizeFileName`, `UniqueDestPath`).
 
 ## 7. Алгоритм BuildPool с exclude
 
-`TunnelManager.BuildPool(destID)` строит `PoolSize` (default 3)
+`TunnelManager.BuildPool(ctx, destID)` строит `PoolSize` (default 3)
 туннелей к одному dest'у:
 
 ```
 exclude = []
 for i in 0..PoolSize:
-    sess = buildInternal(destID, exclude)
+    sess = buildInternal(ctx, destID, exclude)
     if err:
-        sess = buildInternal(destID, nil)   // fallback без exclude
+        sess = buildInternal(ctx, destID, nil)   // fallback без exclude
     sessions.append(sess)
     for h in sess.Tunnel.Path:
         if h.Type == HopRelay:
@@ -267,37 +330,38 @@ lastSession[destID] = sessions[0]
 ## 8. Выбор сессии и failover
 
 ```go
-func (m *TunnelManager) pickSession(destID, attempt) (*Session, error) {
+func (m *TunnelManager) pickSession(ctx context.Context, destID, attempt int) (*Session, error) {
     pool := m.pools[destID]
     if len(pool) > 0 {
         alive := [s for s in pool if s.CanSend() and not s.IsClosed()]
         if attempt < len(alive): return alive[attempt]
-        return m.Build(destID)
+        return m.Build(ctx, destID)
     }
     if attempt == 0 and lastSession[destID].CanSend():
         return lastSession[destID]
-    return m.Build(destID)
+    return m.Build(ctx, destID)
 }
 ```
 
 **Сценарий failover:**
 
 1. `BuildPool` → `pools = [s1, s2, s3]`, `builds_ok = 3`.
-2. `SendMessage #1`: `pickSession(0)` = s1 → ACK.
+2. `SendMessage(ctx, #1)`: `pickSession(ctx, 0)` = s1 → ACK.
 3. **Kill relay1 s1** → `readLoop` EOF → `removeSession(s1)` →
    `pools = [s2, s3]`.
-4. `SendMessage #2`: `pickSession(0)` = s2 → **без нового Build** → ACK.
+4. `SendMessage(ctx, #2)`: `pickSession(ctx, 0)` = s2 → **без нового
+   Build** → ACK.
 
 ## 9. Восстановление
 
 Если пул не используется (`PoolSize=1`):
 
 ```
-SendMessage #1: pickSession(0) = lastSession → ACK
+SendMessage(ctx, #1): pickSession(ctx, 0) = lastSession → ACK
 kill relay1
-SendMessage #2: lastSession (ещё ACTIVE) → ACK timeout
+SendMessage(ctx, #2): lastSession (ещё ACTIVE) → ACK timeout
              → sess.Close() → removeSession
-             → attempt=1: pickSession(1) = Build → новый туннель
+             → attempt=1: pickSession(ctx, 1) = Build(ctx) → новый туннель
              → SendMessageWithID(msgID, ...) → ACK
              → rebuildsOK++
 ```
@@ -328,7 +392,7 @@ type RelayProfile struct {
 - **`ranked`** — сортировка по score + Fisher-Yates среди top-2×MaxHops.
 - **`random`** — случайный порядок.
 - **`subnet`** — ranked + subnet-diversity (не более 1 кандидата из
-  одной /24).
+  одной /24; `subnet_diversity_rejects > 0`).
 
 **CLI:** `-relay-select-mode ranked|random|subnet`.
 
@@ -347,6 +411,17 @@ type RelayProfile struct {
 
 **Артефакт:** `visualization/relay-selection/`.
 
+**Типичные результаты:**
+
+| Режим | `routes` | `acked` | `unique_subnets` | `sub_rej` |
+|---|---|---|---|---|
+| `ranked` | 30 | 10/10 | 3 | 0 |
+| `random` | 30 | 10/10 | 3 | 0 |
+| `subnet` | 30 | 10/10 | 3 | **9** |
+
+В режиме `subnet` — `subnet_diversity_rejects > 0` (2-й кандидат из
+той же /24 отклоняется).
+
 ## 11. TTL и expire
 
 **TTL туннеля:** `Config.TunnelTTLSec` (default **300 секунд**).
@@ -362,16 +437,29 @@ type RelayProfile struct {
 - `StartStoreExpireLoop(ctx, relayStore, destStore, log)` — раз в
   **30 секунд**.
 
-## 12. Отдельный транспорт для туннелей
+## 12. `SetDeadline` для туннельных соединений
 
-**Проблема:** RPC-транспорт использует `ReadTimeout=5s`. Туннельные
-соединения **живут долго** (до TTL).
+**Проблема:** RPC-транспорт и туннельный транспорт должны
+поддерживать `SetDeadline` — дедлайн ставит **вызывающий**:
 
-**Решение:** `Node.trTunnel` — отдельный `tcp.Transport` с
-`ReadTimeout=0`.
+- `rpc.Client.Call` — `secure.SetDeadline(deadline)` после handshake;
+- `BuildCoordinator.Build` — `conn.SetDeadline(deadline)` перед write
+  BUILD, `conn.SetDeadline(time.Time{})` после build;
+- `Server.handleConn` — `conn.SetReadDeadline(now + HandshakeTimeout)`
+  на первый кадр; после handshake — `secure.SetDeadline(time.Time{})`.
 
-**Динамическое переключение:** `rpc.Server.handleConn` при получении
-туннельного кадра делает `SetReadTimeout(0)` через type assertion.
+**`transport.Conn`** — интерфейс с `SetDeadline`,
+`SetReadDeadline`, `SetWriteDeadline`. `tcp.conn` и
+`crypto.SecureConn` — реализуют.
+
+**`tunnel.RawConn`** — тоже с `SetDeadline` (для `BuildCoordinator`
+и `relayLoop`).
+
+**Обоснование:** без `SetDeadline` туннельное соединение может
+висеть бесконечно. С `SetDeadline` — `relayLoop`/`destDataLoop`
+используют **свой** дедлайн (или `time.Time{}` — нет idle timeout).
+Это **фундаментальное требование** для E5-8 (пул с интервалом между
+отправками > 5 сек).
 
 ## 13. CLI-параметры
 
@@ -388,6 +476,9 @@ type RelayProfile struct {
 | `-recv-file-dir` | `RECV_FILE_DIR` | — | Каталог приёма (E7-4) |
 | `-file-chunk-size` | `FILE_CHUNK_SIZE` | `32768` | Размер чанка (E7-4) |
 | `-relay-select-mode` | `RELAY_SELECT_MODE` | `ranked` | Режим выбора (E7-7) |
+| `-handshake-timeout-ms` | `HANDSHAKE_TIMEOUT_MS` | `5000` | Таймаут входящего handshake |
+| `-rpc-timeout-ms` | `RPC_TIMEOUT_MS` | `10000` | Таймаут одного RPC |
+| `-lookup-timeout-ms` | `LOOKUP_TIMEOUT_MS` | `30000` | Таймаут всего lookup |
 | `-exit-after-ms` | `EXIT_AFTER_MS` | `5000` | Force-exit |
 
 ## 14. Демонстрационные сценарии
@@ -465,3 +556,8 @@ sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)
 
 **Unit-тесты:** `tunnel_test.go`, `manager_test.go`, `session_test.go`,
 `message_test.go`, `profile_test.go`, `route_test.go`.
+
+**File-transfer:** `internal/filetransfer/sanitize_test.go` —
+`TestSanitizeFileName_OK`, `TestSanitizeFileName_Reject` (20 кейсов),
+`TestUniqueDestPath_NoCollision`, `TestUniqueDestPath_SuffixOnCollision`,
+`TestUniqueDestPath_NoExtension`, `TestUniqueDestPath_EscapesOutDir`.

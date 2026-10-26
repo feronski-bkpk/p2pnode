@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sort"
@@ -23,16 +24,19 @@ type RoutingTable struct {
 	self ID
 	k    int
 
+	subnetLimit int
+
 	mu       sync.RWMutex
 	buckets  [IDBits]*bucket
 	observer Observer
+	liveness LivenessChecker
 }
 
 func NewRoutingTable(self ID, k int) *RoutingTable {
 	if k <= 0 {
 		k = 4
 	}
-	rt := &RoutingTable{self: self, k: k}
+	rt := &RoutingTable{self: self, k: k, subnetLimit: 2}
 	for i := range rt.buckets {
 		rt.buckets[i] = newBucket()
 	}
@@ -43,6 +47,31 @@ func (rt *RoutingTable) SetObserver(o Observer) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.observer = o
+}
+
+func (rt *RoutingTable) SetLivenessChecker(c LivenessChecker) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.liveness = c
+}
+
+func (rt *RoutingTable) livenessChecker(explicit LivenessChecker) LivenessChecker {
+	if explicit != nil {
+		return explicit
+	}
+	return rt.liveness
+}
+
+func (rt *RoutingTable) SetSubnetDiversityLimit(n int) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.subnetLimit = n
+}
+
+func (rt *RoutingTable) SubnetDiversityLimit() int {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+	return rt.subnetLimit
 }
 
 func (rt *RoutingTable) Self() ID { return rt.self }
@@ -64,8 +93,6 @@ func bucketIndex(self, other ID) int {
 	return -1
 }
 
-const SubnetDiversityLimit = 2
-
 func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 	if err := c.Validate(); err != nil {
 		return false
@@ -78,23 +105,23 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 		return false
 	}
 
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-
-	b := rt.buckets[idx]
 	c.Touch()
 
-	if c.NodeID != rt.self {
-		newSubnet := subnetOfContact(c)
-		if newSubnet != "" {
+	rt.mu.Lock()
+
+	b := rt.buckets[idx]
+
+	if rt.subnetLimit > 0 {
+		if newSubnet := subnetOfContact(c); newSubnet != "" {
 			sameSubnet := 0
 			for _, existing := range b.contacts {
 				if subnetOfContact(existing) == newSubnet {
 					sameSubnet++
 				}
 			}
-			if sameSubnet >= SubnetDiversityLimit {
+			if sameSubnet >= rt.subnetLimit {
 				if b.find(c.NodeID) < 0 {
+					rt.mu.Unlock()
 					if rt.observer != nil {
 						rt.observer.ContactRemoved(c.NodeID, c.Addr(), "subnet_diversity")
 					}
@@ -107,9 +134,11 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 	if existing := b.find(c.NodeID); existing >= 0 {
 		old := b.contacts[existing]
 		if !old.SameIdentity(c) {
+			rt.mu.Unlock()
 			return false
 		}
 		b.update(c)
+		rt.mu.Unlock()
 		if rt.observer != nil {
 			rt.observer.ContactUpdated(c.NodeID, c.Addr(), idx)
 		}
@@ -118,6 +147,7 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 
 	if b.len() < rt.k {
 		b.appendTail(c)
+		rt.mu.Unlock()
 		if rt.observer != nil {
 			rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
 		}
@@ -127,18 +157,52 @@ func (rt *RoutingTable) Add(c Contact, checker LivenessChecker) bool {
 	head, ok := b.head()
 	if !ok {
 		b.appendTail(c)
+		rt.mu.Unlock()
 		if rt.observer != nil {
 			rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
 		}
 		return true
 	}
 
+	chk := rt.livenessChecker(checker)
+	rt.mu.Unlock()
+
 	alive := false
-	if checker != nil {
-		alive = checker.IsAlive(head)
+	if chk != nil {
+		alive = chk.IsAlive(head)
 	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	b = rt.buckets[idx]
+
+	if b.find(head.NodeID) < 0 {
+		if b.find(c.NodeID) >= 0 {
+			return false
+		}
+		if b.len() < rt.k {
+			b.appendTail(c)
+			if rt.observer != nil {
+				rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
+			}
+			return true
+		}
+		newHead, _ := b.head()
+		b.removeHead()
+		b.appendTail(c)
+		if rt.observer != nil {
+			rt.observer.ContactRemoved(newHead.NodeID, newHead.Addr(), "evicted")
+			rt.observer.ContactAdded(c.NodeID, c.Addr(), idx)
+		}
+		return true
+	}
+
 	if alive {
 		b.moveToTail(head.NodeID)
+		if i := b.find(head.NodeID); i >= 0 {
+			b.contacts[i].Touch()
+		}
 		return false
 	}
 
@@ -203,6 +267,64 @@ func (rt *RoutingTable) Remove(id ID) bool {
 	b.contacts = b.contacts[:len(b.contacts)-1]
 	if rt.observer != nil {
 		rt.observer.ContactRemoved(removed.NodeID, removed.Addr(), "removed")
+	}
+	return true
+}
+
+func (rt *RoutingTable) RemoveIfDead(ctx context.Context, id ID) bool {
+	idx := bucketIndex(rt.self, id)
+	if idx < 0 {
+		return false
+	}
+
+	rt.mu.RLock()
+	b := rt.buckets[idx]
+	i := b.find(id)
+	if i < 0 {
+		rt.mu.RUnlock()
+		return false
+	}
+	c := b.contacts[i]
+	chk := rt.liveness
+	rt.mu.RUnlock()
+
+	alive := false
+	if chk != nil {
+		if syncChecker, ok := chk.(interface {
+			IsAliveSync(ctx context.Context, ct Contact) bool
+		}); ok {
+			alive = syncChecker.IsAliveSync(ctx, c)
+		} else {
+			alive = chk.IsAlive(c)
+		}
+	}
+
+	if alive {
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		b = rt.buckets[idx]
+		if j := b.find(id); j >= 0 {
+			b.moveToTail(id)
+			b.contacts[len(b.contacts)-1].Touch()
+			if rt.observer != nil {
+				rt.observer.ContactUpdated(c.NodeID, c.Addr(), idx)
+			}
+		}
+		return false
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	b = rt.buckets[idx]
+	i = b.find(id)
+	if i < 0 {
+		return false
+	}
+	c = b.contacts[i]
+	copy(b.contacts[i:], b.contacts[i+1:])
+	b.contacts = b.contacts[:len(b.contacts)-1]
+	if rt.observer != nil {
+		rt.observer.ContactRemoved(c.NodeID, c.Addr(), "dead")
 	}
 	return true
 }

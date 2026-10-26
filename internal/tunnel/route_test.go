@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func (m *mockSource) AddrOf(nodeID [32]byte) (string, bool) {
 	return a, ok
 }
 
-func (m *mockSource) Ping(addr string) (time.Duration, error) {
+func (m *mockSource) Ping(ctx context.Context, addr string) (time.Duration, error) {
 	if err, ok := m.pingErr[addr]; ok {
 		return 0, err
 	}
@@ -66,7 +67,7 @@ func TestRouteBuilder_BuildOK(t *testing.T) {
 	localID := [32]byte{0xAA}
 	rb := NewRouteBuilder(localID, "self:9001", 3, src, profiles)
 
-	path, err := rb.Build(destID, nil)
+	path, err := rb.Build(context.Background(), destID, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestRouteBuilder_NotEnoughPeers(t *testing.T) {
 	profiles := NewProfileStore()
 	rb := NewRouteBuilder([32]byte{0xAA}, "self:9001", 3, src, profiles)
 
-	_, err := rb.Build([32]byte{0xFF}, nil)
+	_, err := rb.Build(context.Background(), [32]byte{0xFF}, nil)
 	if !errors.Is(err, ErrNoCandidates) {
 		t.Fatalf("want ErrNoCandidates, got %v", err)
 	}
@@ -123,7 +124,7 @@ func TestRouteBuilder_DeadRelay(t *testing.T) {
 	profiles := NewProfileStore()
 	rb := NewRouteBuilder([32]byte{0xAA}, "self:9001", 4, src, profiles)
 
-	path, err := rb.Build(destID, nil)
+	path, err := rb.Build(context.Background(), destID, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestRouteBuilder_DestUnreachable(t *testing.T) {
 	profiles := NewProfileStore()
 	rb := NewRouteBuilder([32]byte{0xAA}, "self:9001", 3, src, profiles)
 
-	_, err := rb.Build([32]byte{0xFF}, nil)
+	_, err := rb.Build(context.Background(), [32]byte{0xFF}, nil)
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -172,7 +173,7 @@ func TestRouteBuilder_Exclude(t *testing.T) {
 	profiles := NewProfileStore()
 	rb := NewRouteBuilder([32]byte{0xAA}, "self:9001", 2, src, profiles)
 
-	path1, err := rb.Build(destID, nil)
+	path1, err := rb.Build(context.Background(), destID, nil)
 	if err != nil {
 		t.Fatalf("build1: %v", err)
 	}
@@ -185,7 +186,7 @@ func TestRouteBuilder_Exclude(t *testing.T) {
 	for id := range used {
 		exclude = append(exclude, id)
 	}
-	path2, err := rb.Build(destID, exclude)
+	path2, err := rb.Build(context.Background(), destID, exclude)
 	if err != nil {
 		t.Fatalf("build2: %v", err)
 	}
@@ -210,7 +211,7 @@ func TestRouteBuilder_ExcludeNotEnough(t *testing.T) {
 	profiles := NewProfileStore()
 	rb := NewRouteBuilder([32]byte{0xAA}, "self:9001", 2, src, profiles)
 
-	_, err := rb.Build(destID, [][32]byte{r1, r2})
+	_, err := rb.Build(context.Background(), destID, [][32]byte{r1, r2})
 	if !errors.Is(err, ErrNoCandidates) {
 		t.Fatalf("want ErrNoCandidates, got %v", err)
 	}

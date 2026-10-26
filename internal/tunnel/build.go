@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -57,7 +58,7 @@ type BuildResult struct {
 	ACKCount int
 }
 
-func (bc *BuildCoordinator) Build(destID [32]byte, path []Hop) (*BuildResult, error) {
+func (bc *BuildCoordinator) Build(ctx context.Context, destID [32]byte, path []Hop) (*BuildResult, error) {
 	if len(path) < 3 {
 		return nil, fmt.Errorf("%w: path too short (%d)", ErrBuildFailed, len(path))
 	}
@@ -66,6 +67,13 @@ func (bc *BuildCoordinator) Build(destID [32]byte, path []Hop) (*BuildResult, er
 	}
 	if path[len(path)-1].Type != HopDest {
 		return nil, fmt.Errorf("%w: last hop must be dest", ErrBuildFailed)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, bc.BuildConfig.BuildTimeout)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, fmt.Errorf("%w: no deadline", ErrBuildFailed)
 	}
 
 	destPub, _, err := bc.FindDest(destID)
@@ -98,6 +106,11 @@ func (bc *BuildCoordinator) Build(destID [32]byte, path []Hop) (*BuildResult, er
 	conn, err := bc.Dial(relay1.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("%w: dial relay1: %v", ErrBuildFailed, err)
+	}
+
+	if err := conn.SetDeadline(deadline); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("%w: set deadline: %v", ErrBuildFailed, err)
 	}
 
 	ttlSec := int64(bc.TTL.Seconds())
@@ -135,8 +148,6 @@ func (bc *BuildCoordinator) Build(destID [32]byte, path []Hop) (*BuildResult, er
 		return nil, fmt.Errorf("%w: write build: %v", ErrBuildFailed, err)
 	}
 
-	deadline := time.Now().Add(bc.BuildTimeout)
-
 	var (
 		acks      = 0
 		buildOK   *protocol.TunnelBuildOKPayload
@@ -145,35 +156,14 @@ func (bc *BuildCoordinator) Build(destID [32]byte, path []Hop) (*BuildResult, er
 	)
 
 	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			readErr = fmt.Errorf("build timeout")
+		if err := ctx.Err(); err != nil {
+			readErr = err
 			break
 		}
 
-		type readResult struct {
-			f   protocol.Frame
-			err error
-		}
-		ch := make(chan readResult, 1)
-		go func() {
-			f, err := conn.ReadFrame()
-			ch <- readResult{f, err}
-		}()
-
-		var frame protocol.Frame
-		select {
-		case r := <-ch:
-			if r.err != nil {
-				readErr = r.err
-				break
-			}
-			frame = r.f
-		case <-time.After(remaining):
-			readErr = fmt.Errorf("build timeout")
-			break
-		}
-		if readErr != nil {
+		frame, err := conn.ReadFrame()
+		if err != nil {
+			readErr = err
 			break
 		}
 
@@ -286,6 +276,11 @@ func (bc *BuildCoordinator) Build(destID [32]byte, path []Hop) (*BuildResult, er
 
 	tun := NewTunnel(tunnelID, initHop, destHop, path, cfg)
 	tun.Activate(e2e)
+
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("%w: clear deadline: %v", ErrBuildFailed, err)
+	}
 
 	if bc.Log != nil {
 		bc.Log.Info("tunnel: build complete",

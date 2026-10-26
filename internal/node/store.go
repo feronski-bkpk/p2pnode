@@ -97,12 +97,14 @@ func (n *Node) publishToKey(key store.ID, rec *record.NodeRecord, value []byte, 
 		if err != nil {
 			return nil, fmt.Errorf("node: local store: %w", err)
 		}
-		return &StoreResult{
+		result := &StoreResult{
 			Key:         key,
 			Replicas:    0,
 			LocalStored: inserted,
 			Duration:    time.Since(start),
-		}, nil
+		}
+		return result, fmt.Errorf("%w: no candidates for key %s (local_stored=%v)",
+			ErrNotEnoughReplicas, key.Short(), inserted)
 	}
 
 	result := &StoreResult{
@@ -116,12 +118,13 @@ func (n *Node) publishToKey(key store.ID, rec *record.NodeRecord, value []byte, 
 		err  error
 	}
 
+	ctx := n.nodeCtx()
 	limit := min(DefaultReplication, len(candidates))
 	ch := make(chan reply, limit)
 	for _, c := range candidates[:limit] {
 		go func(c routing.Contact) {
 			ok, err := n.Client.StoreRPC(
-				n.Local, c, key, value, ttl, n.Config.PingTimeout,
+				ctx, n.Local, c, key, value, ttl, n.Config.RPCTimeout,
 			)
 			ch <- reply{node: c, ok: ok, err: err}
 		}(c)
@@ -146,6 +149,12 @@ func (n *Node) publishToKey(key store.ID, rec *record.NodeRecord, value []byte, 
 		n.Log.Warn("publish: local put failed", "err", err)
 	} else {
 		result.LocalStored = inserted
+	}
+
+	minReplicas := DefaultReplication/2 + 1
+	if result.Replicas < minReplicas {
+		return result, fmt.Errorf("%w: got %d/%d replicas for key %s (local_stored=%v)",
+			ErrNotEnoughReplicas, result.Replicas, limit, key.Short(), result.LocalStored)
 	}
 
 	return result, nil
@@ -173,6 +182,8 @@ func (n *Node) FindValue(key store.ID) (*record.NodeRecord, error) {
 
 	queried := make(map[routing.ID]bool)
 	allCandidates := shortlist
+
+	ctx := n.nodeCtx()
 
 	for iter := 0; iter < routing.IDBits; iter++ {
 		var toQuery []routing.Contact
@@ -204,14 +215,17 @@ func (n *Node) FindValue(key store.ID) (*record.NodeRecord, error) {
 		for _, c := range toQuery {
 			go func(c routing.Contact) {
 				value, found, nodes, err := n.Client.FindValueRPC(
-					n.Local, c, key, n.Config.PingTimeout,
+					ctx, n.Local, c, key, n.Config.RPCTimeout,
 				)
 				ch <- reply{from: c, value: value, found: found, nodes: nodes, err: err}
 			}(c)
 		}
 
 		var newCandidates []routing.Contact
-		var foundValue []byte
+
+		var bestRec *record.NodeRecord
+		var bestSeq uint64
+		var foundCount int
 		for i := 0; i < len(toQuery); i++ {
 			r := <-ch
 			if r.err != nil {
@@ -220,29 +234,45 @@ func (n *Node) FindValue(key store.ID) (*record.NodeRecord, error) {
 			}
 			r.from.MarkVerified()
 			n.Table.Add(r.from, nil)
-			if r.found {
-				foundValue = r.value
-				break
-			}
-			newCandidates = append(newCandidates, r.nodes...)
-		}
 
-		if foundValue != nil {
-			rec, err := record.Decode(foundValue)
+			if !r.found {
+				newCandidates = append(newCandidates, r.nodes...)
+				continue
+			}
+
+			foundCount++
+			rec, err := record.Decode(r.value)
 			if err != nil {
-				return nil, fmt.Errorf("node: decode found value: %w", err)
+				n.Log.Debug("findvalue: decode replica failed",
+					"key", key.Short(),
+					"from", r.from.NodeID.Short(),
+					"err", err)
+				continue
 			}
 			if err := rec.Validate(time.Now()); err != nil {
-				return nil, fmt.Errorf("node: validate found value: %w", err)
+				n.Log.Debug("findvalue: validate replica failed",
+					"key", key.Short(),
+					"from", r.from.NodeID.Short(),
+					"seq", rec.SequenceNumber,
+					"err", err)
+				continue
 			}
+			if bestRec == nil || rec.SequenceNumber > bestSeq {
+				bestRec = rec
+				bestSeq = rec.SequenceNumber
+			}
+		}
 
-			_, _ = n.Store.Put(key, rec, time.Now(), DefaultRecordTTL)
+		if bestRec != nil {
+			_, _ = n.Store.Put(key, bestRec, time.Now(), DefaultRecordTTL)
 
 			n.Events.Log("findvalue_found", map[string]any{
-				"key": key.Short(),
-				"rpc": iter + 1,
+				"key":      key.Short(),
+				"rpc":      iter + 1,
+				"replicas": foundCount,
+				"best_seq": bestSeq,
 			})
-			return rec, nil
+			return bestRec, nil
 		}
 
 		for _, c := range newCandidates {
@@ -266,13 +296,15 @@ func (n *Node) findClosestNodes(target routing.ID, n_ int) []routing.Contact {
 		"table_size", n.Table.Size(),
 	)
 	result := n.Client.LookupNode(
+		n.nodeCtx(),
 		n.Local,
 		n.Table,
 		target,
 		rpc.LookupConfig{
-			Alpha:   n.Config.Alpha,
-			K:       n.Config.KBucketSize,
-			Timeout: n.Config.PingTimeout,
+			Alpha:         n.Config.Alpha,
+			K:             n.Config.KBucketSize,
+			Timeout:       n.Config.RPCTimeout,
+			LookupTimeout: n.Config.LookupTimeout,
 		},
 	)
 	n.Log.Info("findClosestNodes: result",

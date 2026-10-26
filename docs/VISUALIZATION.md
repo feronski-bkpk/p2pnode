@@ -100,7 +100,9 @@ iterations, duration.
 
 ### 4.7. Lookup-логи
 
-Раскрывающиеся строки с трассами итераций.
+Раскрывающиеся строки с трассами итераций. В каждой итерации —
+`Queried`, `Found`, `Timeouts`, **`Dead`** (новое поле — удалённые
+из `shortlist` при таймауте RPC).
 
 ### 4.8. Routing-таблицы
 
@@ -108,7 +110,7 @@ iterations, duration.
 
 ### 4.9. Star vs Ring
 
-Сравнение bootstrap-схем (E2-8).
+Сравнение bootstrap-схем.
 
 ### 4.10. Star vs Ring vs Tree vs Multiseed
 
@@ -128,6 +130,8 @@ msgpack / JSON / gob: size, encode, decode.
 - **Чанки:** количество, размер, `acked` / `total`.
 - **Время:** `duration_ms` полной передачи.
 - **Throughput:** `size_bytes / duration_ms` → КиБ/с.
+- **Безопасность имени:** `name_sanitized` (bool), `collision_suffix`
+  (bool).
 
 **Как читать:**
 
@@ -135,6 +139,9 @@ msgpack / JSON / gob: size, encode, decode.
   Это **критерий успеха E7-4**.
 - **`chunks_acked = chunks_total`** — все чанки подтверждены.
 - **`retries = 0`** — ни один чанк не требовал повтора.
+- **`name_sanitized=true`** — `SanitizeFileName` не отклонил имя.
+- **`collision_suffix=true`** — `UniqueDestPath` добавил `.1`/`.2`
+  (повторный `payload.bin`).
 
 ### 4.13. Underlay
 
@@ -167,15 +174,22 @@ msgpack / JSON / gob: size, encode, decode.
 
 **Как читать:**
 
-| Режим | Что ожидать |
-|-------|-------------|
-| `baseline` | `dur_mean ≈ 4–15 мс`, `found=15/15`, `file_match=true` |
-| `delay-50` | `dur_mean ≈ 160 мс` (×36), `found≥13/15` |
-| `loss-5` | `dur_mean ≈ 250 мс`, `dur_p95 ≥ 1000 мс` (retry) |
-| `stress` | `dur_mean ≈ 1100 мс`, `file_match=false` (timeout) |
+| Режим | Реальные результаты (N=5) |
+|---|---|
+| `baseline` | `dur_mean=3.2ms`, `found=11/12`, `file_match=True` |
+| `delay-50` | `dur_mean=154.1ms` (**×48**), `found=11/12`, `file_match=True` |
+| `loss-5` | `dur_mean=124.4ms`, `p95=205ms`, `found=12/12`, `file_match=True` |
+| `stress` | `dur_mean=724.2ms`, `p95=1343ms`, `found=12/12`, `file_match=False` (timeout) |
 
-**Ключевой вывод:** **lookup выживает** при stress (`found=14/15`),
-но **latency растёт** в **×260**.
+**Ключевой вывод:** `delay-50` — **×48** от baseline. Это
+**доказывает**, что единый дедлайн RPC работает: `Ping(timeout=5s)`
+реально укладывается в ~5s, а не «10s handshake + 5s read». Если бы
+`HandshakeTimeout=10s` остался — было бы `≈10000ms` на каждый RPC.
+
+**`file_send_duration_ms`** — для `baseline` — **артефакт**
+`-exit-after-ms 60000` (верхняя граница); для `delay-50`/`loss-5` —
+**реальное** время (`file_match=True`); для `stress` — **timeout**
+(`file_match=False`).
 
 ### 4.15. Relay selection
 
@@ -187,13 +201,21 @@ msgpack / JSON / gob: size, encode, decode.
   `unique_subnets`, `subnet_diversity_rejects`, `total_duration_ms`.
 - Список `relay_addrs` — использованные ретрансляторы.
 
+**Реальные результаты (N=9, iterations=10):**
+
+| Режим | `routes` | `acked` | `accepted` | `unique_subnets` | `sub_rej` |
+|---|---|---|---|---|---|
+| `ranked` | 30 | 10/10 | 60 | 3 | 0 |
+| `random` | 30 | 10/10 | 60 | 3 | 0 |
+| `subnet` | 30 | 10/10 | 60 | 3 | **9** |
+
 **Как читать:**
 
 - **`ranked`** — **больше subnets** (3 зоны), избегает медленных
   узлов.
 - **`random`** — **1 subnet** (случайно все в одной зоне).
 - **`subnet`** — **`subnet_diversity_rejects > 0`** — режим
-  отклоняет 2-го кандидата из одной /24.
+  отклоняет 2-го кандидата из одной /24 (**9 rejects**).
 - **`duration_ms`** — время полного прогона (10 итераций × 1 отправка).
 
 ### 4.16. Eclipse/Sybil
@@ -223,6 +245,10 @@ msgpack / JSON / gob: size, encode, decode.
 ```
 
 5 режимов: `overlay`, `mutual`, `asym`, `topk`, `tree`.
+
+**Замечание:** `metrics/collected/` должен **существовать** (создаётся
+`collect_routing.sh` / `docker_collect.sh`). Если `stop_all.sh` удалил
+`collected` — запусти `collect_routing.sh` заново.
 
 ### 5.2. Star vs Ring — `scripts/compare_visual.sh`
 
@@ -256,6 +282,11 @@ msgpack / JSON / gob: size, encode, decode.
 
 Вывод в консоль + `RESULT: NON-DEGENERATE` / `DEGENERATE`.
 
+**Замечание:** для **N=3** (K=4) — критерий 1b («≤1 full registry»)
+**не выполняется** — это **структурное свойство** маленькой сети
+(каждый знает всех). `DEGENERATE` — **ожидаемо**. Проверка имеет
+смысл для **N=15+** (star) — там **не** все знают всех.
+
 ### 5.6. Event stream — `internal/events`
 
 JSONL, `<state-dir>/events.jsonl`. Все события с timestamp, node_id, peer.
@@ -265,6 +296,8 @@ JSONL, `<state-dir>/events.jsonl`. Все события с timestamp, node_id, 
 ```bash
 cat /tmp/node-01/events.jsonl | jq .
 cat /tmp/node-*/events.jsonl | jq 'select(.event=="handshake_done")' | tail -20
+cat /tmp/node-*/events.jsonl | jq 'select(.event=="refresh")' | tail -5
+cat /tmp/node-*/events.jsonl | jq 'select(.event=="findvalue_found")' | tail -5
 ```
 
 ## 6. Event stream — справочник
@@ -285,10 +318,11 @@ cat /tmp/node-*/events.jsonl | jq 'select(.event=="handshake_done")' | tail -20
 | `lookup_iter` | Итерация | `iter`, `queried` |
 | `lookup_done` | Конец | `found`, `duration_ms` |
 | `store_start/accepted/rejected/done` | STORE | `key`, `peer` |
-| `findvalue_start/found/notfound` | FIND_VALUE | `key` |
+| `findvalue_start/found/notfound` | FIND_VALUE | `key`, `replicas`, `best_seq` |
 | `handshake_start/done/failed` | AKE | `peer`, `session_id` |
 | `expire` | Очистка | `count` |
 | `republish` | Re-publish | `count` |
+| `refresh` | Refresh таблицы | `rpc`, `iterations`, `table_size`, `duration_ms` |
 | `publish_start/publish/publish_done` | Publish | `node_id`, `key` |
 
 ## 7. Типичные сценарии
@@ -406,3 +440,33 @@ grep -n "zone-" internal/tunnel/profile.go internal/routing/routing.go
 ```bash
 ./scripts/demo_eclipse.sh 11 3 30 5
 ```
+
+### 8.6. `visualize.sh: input dir metrics/collected not found`
+
+**Причина:** `stop_all.sh` удалил `metrics/collected/` (или
+`collect_routing.sh` не запускался).
+**Решение:** `run_star.sh` → `sleep` → `collect_routing.sh` →
+`visualize.sh` (без `stop_all` между). Или:
+```bash
+./scripts/run_star.sh 5
+sleep 5
+./scripts/collect_routing.sh
+./scripts/visualize.sh metrics/collected out/graph "N=5"
+./scripts/stop_all.sh
+```
+
+### 8.7. `check_ne_degenerate.sh` → `DEGENERATE` на N=3
+
+**Причина:** N=3, K=4 — каждый узел знает всех (2 контакта = N-1).
+Критерий 1b («≤1 full registry») **не выполняется** — это
+**структурное свойство** маленькой сети.
+**Решение:** для **N=15+** критерий имеет смысл; для **N=3** —
+`DEGENERATE` **ожидаемо**.
+
+### 8.8. `lookups_found` меньше `lookups_total` (не 100%)
+
+**Причина:** DHT **вероятностная** — target **отсутствует** в
+стартовой таблице, lookup может не найти его за `LookupTimeout`.
+**Ожидаемо:** `found / total ≥ 80%` — **критерий**.
+**Решение:** если `< 80%` — увеличить `LookupTimeout`, `Alpha`,
+или N.

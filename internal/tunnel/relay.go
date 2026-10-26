@@ -12,6 +12,8 @@ type RawConn interface {
 	WriteFrame(protocol.Frame) error
 	RemoteAddr() string
 	Close() error
+
+	SetDeadline(t time.Time) error
 }
 
 type RelayState struct {

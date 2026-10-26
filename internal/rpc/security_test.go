@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -23,7 +24,7 @@ func TestSecurity_WrongNodeID(t *testing.T) {
 	var wrongID routing.ID
 	wrongID[0] = 0xAA
 
-	_, err := client.Handshake(nodes[0].contact.Addr(), &wrongID)
+	_, err := client.Handshake(context.Background(), nodes[0].contact.Addr(), &wrongID)
 	if err == nil {
 		t.Fatal("handshake with wrong expected peer id should fail")
 	}

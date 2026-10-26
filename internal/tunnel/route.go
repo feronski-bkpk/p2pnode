@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"math/big"
@@ -11,7 +12,7 @@ type RouteSource interface {
 	FindDest(destID [32]byte) (addr string, pubkey []byte, err error)
 	KnownPeers() [][32]byte
 	AddrOf(nodeID [32]byte) (string, bool)
-	Ping(addr string) (time.Duration, error)
+	Ping(ctx context.Context, addr string) (time.Duration, error)
 }
 
 type SelectMode string
@@ -55,7 +56,7 @@ func NewRouteBuilder(localID [32]byte, localAddr string, maxHops uint8,
 	}
 }
 
-func (rb *RouteBuilder) Build(destID [32]byte, exclude [][32]byte) ([]Hop, error) {
+func (rb *RouteBuilder) Build(ctx context.Context, destID [32]byte, exclude [][32]byte) ([]Hop, error) {
 	destAddr, _, err := rb.Source.FindDest(destID)
 	if err != nil {
 		rb.logf("route: dest not found",
@@ -121,7 +122,7 @@ func (rb *RouteBuilder) Build(destID [32]byte, exclude [][32]byte) ([]Hop, error
 		rb.Profiles.RecordAddr(id, addr)
 
 		start := time.Now()
-		_, err := rb.Source.Ping(addr)
+		_, err := rb.Source.Ping(ctx, addr)
 		rtt := time.Since(start)
 
 		if err != nil {

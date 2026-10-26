@@ -43,6 +43,7 @@ type Node struct {
 
 	ExpireInterval    time.Duration
 	RepublishInterval time.Duration
+	RefreshInterval   time.Duration
 
 	tunnelMgr      *tunnel.TunnelManager
 	tunnelHandlers *tunnel.HandlerConfig
@@ -118,15 +119,14 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 
 	table := routing.NewRoutingTable(id.NodeID, cfg.KBucketSize)
 	table.SetObserver(NewRoutingObserver(ev))
+	table.SetSubnetDiversityLimit(cfg.SubnetDiversityLimit)
 
 	client := rpc.NewClient(tr, log, ev, id)
-	checker := &rpc.PingChecker{
-		Client:  client,
-		Local:   local,
-		Timeout: cfg.PingTimeout,
-	}
+	checker := rpc.NewPingChecker(client, local, cfg.PingTimeout)
+	table.SetLivenessChecker(checker)
 	st := store.New()
 	srv := rpc.NewServer(local, id, table, st, checker, log, ev)
+	srv.HandshakeTimeout = cfg.HandshakeTimeout
 
 	if cfg.SybilMode {
 		srv.SybilConfig = &rpc.SybilConfig{
@@ -157,6 +157,7 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 		trTunnel:          trTunnel,
 		ExpireInterval:    ExpireInterval,
 		RepublishInterval: RepublishInterval,
+		RefreshInterval:   cfg.RefreshInterval,
 	}
 
 	n.profileStore = tunnel.NewProfileStore()
@@ -179,6 +180,13 @@ func New(cfg config.Config, log *slog.Logger) (*Node, error) {
 	return n, nil
 }
 
+func (n *Node) nodeCtx() context.Context {
+	if n.bgCtx != nil {
+		return n.bgCtx
+	}
+	return context.Background()
+}
+
 func (n *Node) Start() {
 	go n.Server.Serve(n.Listener)
 }
@@ -194,8 +202,13 @@ func (n *Node) Stop() error {
 	n.stopBackgroundTasks()
 	n.Log.Debug("node: background tasks stopped", "elapsed_ms", time.Since(start).Milliseconds())
 
-	if n.tunnelCancel != nil {
-		n.tunnelCancel()
+	if n.Checker != nil {
+		n.Checker.Close()
+	}
+
+	if n.Events != nil {
+		n.Log.Debug("node: closing events logger")
+		_ = n.Events.Close()
 	}
 
 	if n.tunnelMgr != nil && n.tunnelMgr.Trace != nil {
@@ -237,9 +250,11 @@ func (n *Node) Bootstrap() error {
 		return nil
 	}
 
+	ctx := n.nodeCtx()
+
 	for _, addr := range n.Config.BootstrapPeers {
 		n.Log.Info("bootstrap: pinging seed", "addr", addr)
-		seed, err := n.Client.Ping(n.Local, addr, nil, n.Config.PingTimeout)
+		seed, err := n.Client.Ping(ctx, n.Local, addr, nil, n.Config.PingTimeout)
 		if err != nil {
 			n.Log.Warn("bootstrap: ping seed failed", "addr", addr, "err", err)
 			continue
@@ -249,7 +264,7 @@ func (n *Node) Bootstrap() error {
 			"addr", seed.Addr())
 
 		if n.Config.SkipSelfLookup {
-			nodes, err := n.Client.FindNodeRPC(n.Local, seed, n.Identity.NodeID, n.Config.PingTimeout)
+			nodes, err := n.Client.FindNodeRPC(ctx, n.Local, seed, n.Identity.NodeID, n.Config.RPCTimeout)
 			if err != nil {
 				n.Log.Warn("bootstrap: find_node from seed failed", "err", err)
 				continue
@@ -276,13 +291,15 @@ func (n *Node) Bootstrap() error {
 		n.Table.Add(seed, n.Checker)
 
 		result := n.Client.LookupNode(
+			ctx,
 			n.Local,
 			n.Table,
 			n.Identity.NodeID,
 			rpc.LookupConfig{
-				Alpha:   n.Config.Alpha,
-				K:       n.Config.KBucketSize,
-				Timeout: n.Config.PingTimeout,
+				Alpha:         n.Config.Alpha,
+				K:             n.Config.KBucketSize,
+				Timeout:       n.Config.RPCTimeout,
+				LookupTimeout: n.Config.LookupTimeout,
 			},
 		)
 		n.Log.Info("bootstrap: self-lookup done",
@@ -290,6 +307,10 @@ func (n *Node) Bootstrap() error {
 			"iterations", result.Iterations,
 			"duration_ms", result.Duration.Milliseconds(),
 			"table_size", n.Table.Size())
+	}
+
+	if n.Table.Size() == 0 {
+		return fmt.Errorf("node: bootstrap failed: routing table is empty (all seeds unreachable?)")
 	}
 	return nil
 }
@@ -331,12 +352,15 @@ func (n *Node) StartFileReceiver(ctx context.Context, dir string) error {
 }
 
 func (n *Node) LookupNodeMultiPath(target routing.ID) (rpc.MultiPathResult, error) {
+	ctx := n.nodeCtx()
+
 	paths := n.Config.LookupPaths
 	if paths <= 1 || len(n.Config.BootstrapPeers) == 0 {
-		res := n.Client.LookupNode(n.Local, n.Table, target, rpc.LookupConfig{
-			Alpha:   n.Config.Alpha,
-			K:       n.Config.KBucketSize,
-			Timeout: n.Config.PingTimeout,
+		res := n.Client.LookupNode(ctx, n.Local, n.Table, target, rpc.LookupConfig{
+			Alpha:         n.Config.Alpha,
+			K:             n.Config.KBucketSize,
+			Timeout:       n.Config.RPCTimeout,
+			LookupTimeout: n.Config.LookupTimeout,
 		})
 		return rpc.MultiPathResult{
 			Target:    target,
@@ -350,7 +374,7 @@ func (n *Node) LookupNodeMultiPath(target routing.ID) (rpc.MultiPathResult, erro
 
 	seeds := make([]routing.Contact, 0, len(n.Config.BootstrapPeers))
 	for _, addr := range n.Config.BootstrapPeers {
-		seed, err := n.Client.Ping(n.Local, addr, nil, n.Config.PingTimeout)
+		seed, err := n.Client.Ping(ctx, n.Local, addr, nil, n.Config.PingTimeout)
 		if err != nil {
 			n.Log.Warn("multipath: ping seed failed", "addr", addr, "err", err)
 			continue
@@ -364,19 +388,22 @@ func (n *Node) LookupNodeMultiPath(target routing.ID) (rpc.MultiPathResult, erro
 
 	pingFn := func(seed routing.Contact) (*routing.RoutingTable, error) {
 		tbl := routing.NewRoutingTable(n.Identity.NodeID, n.Config.KBucketSize)
+		tbl.SetSubnetDiversityLimit(n.Config.SubnetDiversityLimit)
 		tbl.Add(seed, nil)
 		return tbl, nil
 	}
 
 	result := n.Client.LookupNodeMultiPath(
+		ctx,
 		n.Local,
 		seeds,
 		target,
 		paths,
 		rpc.LookupConfig{
-			Alpha:   n.Config.Alpha,
-			K:       n.Config.KBucketSize,
-			Timeout: n.Config.PingTimeout,
+			Alpha:         n.Config.Alpha,
+			K:             n.Config.KBucketSize,
+			Timeout:       n.Config.RPCTimeout,
+			LookupTimeout: n.Config.LookupTimeout,
 		},
 		pingFn,
 	)

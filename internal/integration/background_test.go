@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,10 +12,11 @@ func startClusterWithIntervals(t *testing.T, n int, basePort int,
 	expire, republish time.Duration) []*node.Node {
 	t.Helper()
 	nodes := startCluster(t, n, basePort)
+	ctx := context.Background()
 	for _, nd := range nodes {
 		nd.ExpireInterval = expire
 		nd.RepublishInterval = republish
-		nd.StartBackgroundTasks()
+		nd.StartBackgroundTasks(ctx)
 	}
 	return nodes
 }
@@ -92,15 +94,16 @@ func TestRepublishIncrementsSequence(t *testing.T) {
 
 func TestRepublishOnlyOwnRecords(t *testing.T) {
 	nodes := startCluster(t, 3, 18900)
+	ctx := context.Background()
 
 	nodes[0].ExpireInterval = time.Hour
 	nodes[0].RepublishInterval = 300 * time.Millisecond
-	nodes[0].StartBackgroundTasks()
+	nodes[0].StartBackgroundTasks(ctx)
 
 	for i := 1; i < len(nodes); i++ {
 		nodes[i].ExpireInterval = time.Hour
 		nodes[i].RepublishInterval = time.Hour
-		nodes[i].StartBackgroundTasks()
+		nodes[i].StartBackgroundTasks(ctx)
 	}
 
 	rec := makeNodeRecord(t, nodes[1], 30*time.Second, 1)

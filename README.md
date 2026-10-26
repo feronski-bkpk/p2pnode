@@ -112,6 +112,11 @@ sleep 20
 ./scripts/demo_store.sh 5 15
 ```
 
+**Важно:** `Publish` возвращает ошибку `ErrNotEnoughReplicas`, если
+получено **меньше 2 подтверждений** из 3 (отказоустойчивость хранения).
+`FindValue` возвращает запись с **максимальным `sequence_number`**
+среди реплик (устаревшая реплика не перекрывает актуальную).
+
 ### 3. Защищённый канал
 
 ```bash
@@ -119,7 +124,9 @@ sleep 20
 ```
 
 Все RPC идут через handshake + AEAD. Трафик зашифрован
-ChaCha20-Poly1305.
+ChaCha20-Poly1305. **Единый дедлайн** (`HandshakeTimeout`, `RPCTimeout`)
+на dial + handshake + write + read — не «10s на handshake + отдельный
+read timeout».
 
 ### 4. Туннели через ретрансляторы
 
@@ -156,6 +163,10 @@ ChaCha20-Poly1305.
 ./scripts/demo_failures.sh 7
 ```
 
+**Дополнительно:** `Bootstrap` возвращает **ошибку**, если после
+попыток присоединения к seed'ам routing-таблица **пустая** — явная
+сигнализация «не удалось присоединиться к сети».
+
 ### 7. Docker: N=21 (продвинутый масштаб)
 
 ```bash
@@ -174,6 +185,11 @@ ChaCha20-Poly1305.
 
 **Что проверяется:** разбиение на чанки, ACK на каждый чанк,
 SHA-256 всего файла, дедупликация. **Артефакт:** `visualization/file-transfer/`.
+
+**Безопасность имени:** `Header.Name` проходит `SanitizeFileName` —
+отклоняются `../`, абсолютные пути, `\x00`, Windows reserved
+(`CON`, `NUL`, `COM1..9`, …), имена > 255 байт. Коллизии
+разрешаются суффиксом `.1`, `.2` (`UniqueDestPath`).
 
 ### 9. Ограниченный underlay (nftables)
 
@@ -210,6 +226,10 @@ rate, file goodput.
 **Артефакт:** `visualization/netem/` (`baseline/`, `delay-50/`,
 `loss-5/`, `stress/`, `summary.json`).
 
+**Типичные результаты:** `baseline ≈ 3ms`, `delay-50 ≈ 154ms`,
+`loss-5 ≈ 124ms`, `stress ≈ 724ms` — подтверждают, что
+единый дедлайн RPC применяется ко всему вызову.
+
 ### 11. Профиль ретранслятора
 
 ```bash
@@ -222,6 +242,9 @@ rate, file goodput.
 
 **Артефакт:** `visualization/relay-selection/` (`ranked/`, `random/`,
 `subnet/`, `summary.json`).
+
+**Типичный результат:** в режиме `subnet` — `subnet_diversity_rejects > 0`
+(2-й кандидат из той же /24 отклоняется); в `ranked`/`random` — `0`.
 
 ### 12. Eclipse/Sybil защита
 
@@ -288,7 +311,7 @@ p2pnode/
 │   ├── store/                      ← локальное хранилище DHT
 │   ├── transport/
 │   │   ├── transport.go            ← интерфейсы Conn/Listener/Transport
-│   │   └── tcp/                    ← TCP-реализация (SetReadTimeout)
+│   │   └── tcp/                    ← TCP-реализация (SetDeadline)
 │   └── tunnel/                     ← туннели через ретрансляторы
 ├── scripts/
 │   ├── common.sh                   ← общие переменные
@@ -362,6 +385,11 @@ p2pnode/
 | Параллелизм lookup | `-alpha` | `ALPHA` | `3` |
 | Таймаут connect | `-connect-timeout-ms` | `CONNECT_TIMEOUT_MS` | `3000` |
 | Таймаут PING | `-ping-timeout-ms` | `PING_TIMEOUT_MS` | `5000` |
+| Таймаут handshake (входящий) | `-handshake-timeout-ms` | `HANDSHAKE_TIMEOUT_MS` | `5000` |
+| Таймаут одного RPC (FindNode/Store/FindValue) | `-rpc-timeout-ms` | `RPC_TIMEOUT_MS` | `10000` |
+| Таймаут всего lookup | `-lookup-timeout-ms` | `LOOKUP_TIMEOUT_MS` | `30000` |
+| Интервал refresh таблицы | `-refresh-interval-ms` | `REFRESH_INTERVAL_MS` | `60000` |
+| Лимит subnet diversity (0 = отключено) | `-subnet-diversity-limit` | `SUBNET_DIVERSITY_LIMIT` | `2` |
 | Размер кадра | `-max-frame-payload` | `MAX_FRAME_PAYLOAD` | `65536` |
 | Уровень логов | `-log-level` | `LOG_LEVEL` | `INFO` |
 | Каталог метрик | `-export-dir` | `EXPORT_DIR` | — |
@@ -403,6 +431,18 @@ p2pnode/
 | Число lookup-путей | `-lookup-paths` | `LOOKUP_PATHS` | `1` |
 | Sybil-режим | `-sybil-mode` | `SYBIL_MODE` | `false` |
 | Victim NodeID | `-sybil-victim` | `SYBIL_VICTIM` | — |
+
+### Замечания по таймаутам
+
+- **Единый дедлайн на RPC:** `HandshakeTimeout` + `RPCTimeout`
+  применяются к **dial + handshake + write + read** одного вызова,
+  а не раздельно. `Ping(timeout=5s)` реально укладывается в ~5s.
+- **Refresh таблицы:** раз в `RefreshInterval` узел делает
+  `LookupNode(self)` (стандартный Kademlia refresh).
+- **Subnet diversity:** `0` — отключено (bucket заполняется до `K`),
+  `>=K` — фактически отключено, `2` — default (защита от Sybil).
+- **`Bootstrap`** возвращает ошибку, если после попыток присоединения
+  routing-таблица пустая — явная сигнализация неуспешности.
 
 ## Документация
 

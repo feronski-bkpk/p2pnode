@@ -32,6 +32,8 @@ type Server struct {
 
 	SybilConfig *SybilConfig
 
+	HandshakeTimeout time.Duration
+
 	ln transport.Listener
 }
 
@@ -45,13 +47,14 @@ func NewServer(
 	ev *events.Logger,
 ) *Server {
 	return &Server{
-		Local:    local,
-		Identity: id,
-		Table:    table,
-		Store:    st,
-		Checker:  checker,
-		Log:      log,
-		Ev:       ev,
+		Local:            local,
+		Identity:         id,
+		Table:            table,
+		Store:            st,
+		Checker:          checker,
+		Log:              log,
+		Ev:               ev,
+		HandshakeTimeout: 5 * time.Second,
 	}
 }
 
@@ -76,6 +79,17 @@ func (s *Server) handleConn(conn transport.Conn) {
 		s.Ev.LogPeer("conn_closed", "", conn.RemoteAddr(), nil)
 	}()
 
+	hsTimeout := s.HandshakeTimeout
+	if hsTimeout <= 0 {
+		hsTimeout = 5 * time.Second
+	}
+	hsDeadline := time.Now().Add(hsTimeout)
+
+	if err := conn.SetReadDeadline(hsDeadline); err != nil {
+		_ = conn.Close()
+		return
+	}
+
 	firstFrame, err := conn.ReadFrame()
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
@@ -91,12 +105,10 @@ func (s *Server) handleConn(conn transport.Conn) {
 		protocol.MsgTunnelBuildAck, protocol.MsgTunnelAck,
 		protocol.MsgTunnelClose:
 
-		if sc, ok := conn.(interface{ SetReadTimeout(time.Duration) }); ok {
-			sc.SetReadTimeout(0)
-			s.Log.Debug("rpc: tunnel conn read timeout disabled",
-				"remote", conn.RemoteAddr(),
-				"type", firstFrame.Type.String())
-		}
+		_ = conn.SetDeadline(time.Time{})
+		s.Log.Debug("rpc: tunnel conn deadline cleared",
+			"remote", conn.RemoteAddr(),
+			"type", firstFrame.Type.String())
 
 		if s.TunnelHandler == nil {
 			s.Log.Warn("rpc: tunnel handler not set",
@@ -129,6 +141,10 @@ func (s *Server) handleConn(conn transport.Conn) {
 		return
 	}
 
+	if err := conn.SetDeadline(hsDeadline); err != nil {
+		return
+	}
+
 	s.Ev.LogPeer("handshake_start", "", conn.RemoteAddr(), nil)
 
 	secure, peerID, err := s.handleHandshake(conn, firstFrame)
@@ -138,6 +154,8 @@ func (s *Server) handleConn(conn transport.Conn) {
 		return
 	}
 	defer secure.Close()
+
+	_ = secure.SetDeadline(time.Time{})
 
 	peerIDShort := fmtShortID(peerID)
 

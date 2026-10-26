@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"p2pnode/internal/protocol"
 	"p2pnode/internal/transport"
@@ -58,6 +59,10 @@ func (p *pipeConn) Close() error {
 	p.closed = true
 	return nil
 }
+
+func (p *pipeConn) SetDeadline(t time.Time) error      { return nil }
+func (p *pipeConn) SetReadDeadline(t time.Time) error  { return nil }
+func (p *pipeConn) SetWriteDeadline(t time.Time) error { return nil }
 
 func TestSecureConn_RoundTrip(t *testing.T) {
 	a, b := newPipePair()

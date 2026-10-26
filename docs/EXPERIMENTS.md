@@ -22,13 +22,15 @@ JSON + сводная таблица. Каждый прогон сопровож
 
 Реализовать **надёжную** передачу файлов произвольного размера через
 **туннель** с E2E-шифрованием. Файл разбивается на **чанки**, каждый
-ACK'ается, итог проверяется по **SHA-256**.
+ACK'ается, итог проверяется по **SHA-256**. Имя файла проходит
+`SanitizeFileName` (защита от path traversal).
 
 ### Гипотеза
 
 E2E-шифрование + ACK на каждый чанк + проверка SHA-256 всего файла
 обеспечивают **целостную** передачу **без потерь** даже при отказе
-ретранслятора (используется rebuild туннеля).
+ретранслятора (используется rebuild туннеля). `SanitizeFileName` +
+`UniqueDestPath` защищают от записи за пределы `outDir`.
 
 ### Изменяемый фактор
 
@@ -46,6 +48,8 @@ E2E-шифрование + ACK на каждый чанк + проверка SHA
 | `retries` | шт | Повторные отправки чанков |
 | `duration_ms` | мс | Полное время передачи |
 | `sha256_match` | bool | `recv_sha256 == send_sha256` |
+| `name_sanitized` | bool | `SanitizeFileName` не отклонил имя |
+| `collision_suffix` | bool | `UniqueDestPath` добавил `.1`/`.2` |
 
 ### Критерий успешности
 
@@ -53,6 +57,11 @@ E2E-шифрование + ACK на каждый чанк + проверка SHA
 2. **`chunks_acked == chunks_total`** для **100%** прогонов.
 3. **`throughput ≥ 100 КиБ/с`** при 3 ретрансляторах (loopback).
 4. **`retries ≤ chunks_total / 10`** (не более 10% повторов).
+5. **`name_sanitized == true`** для валидных имён (`payload.bin`,
+   `файл.txt`).
+6. **Злонамеренные имена отклоняются** (`../../etc/passwd`, `/tmp/x`,
+   `CON`, `NUL`, `a/b`, `..`, `\x00`).
+7. **Повторный `payload.bin`** → `payload.1.bin` (`collision_suffix`).
 
 ### Число повторов
 
@@ -63,7 +72,16 @@ E2E-шифрование + ACK на каждый чанк + проверка SHA
 `visualization/e7-experiments/E7-4/`:
 - `run-01-chunk16k.json`, `run-02-chunk16k.json`, …;
 - `summary.json` со средними/медианами по каждому размеру;
-- `manifest.json` с конфигурацией.
+- `manifest.json` с конфигурацией;
+- `malicious-name.log` — попытки с невалидными именами (dev/null).
+
+### Демонстрация
+
+```bash
+./scripts/demo_file_transfer.sh 5 1 2
+```
+
+**Ожидаемо:** `OK: размер и SHA-256 совпадают`.
 
 ## 3. Ограниченный underlay
 
@@ -121,6 +139,11 @@ E2E-шифрование + ACK на каждый чанк + проверка SHA
 - **Delay 100 мс + loss 10%** — **значительно** снижает goodput
   файловой передачи.
 
+**Дополнительно:** единый дедлайн RPC (`HandshakeTimeout` + `RPCTimeout`
+на весь вызов) означает, что `Ping(timeout=5s)` реально укладывается
+в ~5s, а не «10s handshake + 5s read». Это **наблюдаемо** в метрике
+`dur_mean`.
+
 ### Изменяемый фактор
 
 **Набор netem-параметров:**
@@ -156,6 +179,15 @@ E2E-шифрование + ACK на каждый чанк + проверка SHA
 `visualization/e7-experiments/E7-6/`:
 - `baseline/`, `delay-50/`, `loss-5/`, `stress/` — по одному прогону;
 - `summary.json` — сводная таблица.
+
+### Реальные результаты (прогон N=5)
+
+| Режим | `found` | `rpc_mean` | `dur_mean` | `dur_p95` | `file_match` |
+|---|---|---|---|---|---|
+| `baseline` | 11/12 | 2.75 | **3.2 ms** | 5.0 | **True** |
+| `delay-50` | 11/12 | 2.58 | **154.1 ms** | 205.0 | **True** |
+| `loss-5` | 12/12 | 3.00 | **124.4 ms** | 205.0 | **True** |
+| `stress` | 12/12 | 3.00 | **724.2 ms** | 1343.0 | **False** |
 
 ## 5. Профиль ретранслятора
 
@@ -197,6 +229,18 @@ E2E-шифрование + ACK на каждый чанк + проверка SHA
 `visualization/e7-experiments/E7-7/`:
 - `ranked/`, `random/`, `subnet-aware/`;
 - `summary.json`.
+
+### Реальные результаты (N=9, iterations=10)
+
+| Режим | `routes` | `acked` | `accepted` | `unique_subnets` | `sub_rej` |
+|---|---|---|---|---|---|
+| `ranked` | 30 | 10/10 | 60 | **3** | 0 |
+| `random` | 30 | 10/10 | 60 | **3** | 0 |
+| `subnet` | 30 | 10/10 | 60 | **3** | **9** |
+
+**Ключевой вывод:** в режиме `subnet` — `subnet_diversity_rejects=9`
+(2-й кандидат из той же /24 отклоняется). Это **доказывает**, что
+subnet diversity работает.
 
 ## 6. Исследовательская защита
 
@@ -244,6 +288,19 @@ lookup + subnet diversity** **сохраняют** корректный отве
 - 4 прогона (none / multipath / diversity / both);
 - `summary.json`.
 
+### Реальные результаты (N=11, 5 Sybil, 30 iter)
+
+| Режим | `paths` | `correct` | `correct_pct` |
+|---|---|---|---|
+| `single` | 1 | **0/30** | **0.0%** |
+| `multipath` | 3 | **30/30** | **100.0%** |
+
+### Демонстрация
+
+```bash
+./scripts/demo_eclipse.sh 11 3 30 5
+```
+
 ## 7. Регрессия
 
 ### Цель
@@ -277,6 +334,20 @@ lookup + subnet diversity** **сохраняют** корректный отве
 - `demo-tunnel.log`, `demo-store.log`, `demo-failures.log`;
 - `summary.json`.
 
+### Реальные результаты
+
+`go test -race ./...` — **все пакеты `ok`**, включая:
+
+- `protocol` — frame chunked tests.
+- `routing` — `TestBucketFillsToK_*`, `TestRemoveIfDead`,
+  `TestAddUsesTableLivenessChecker`.
+- `rpc` — `TestRPC_SilentPeer_HandshakeDeadline`.
+- `tunnel` — `TestTunnelIntegration_*`.
+- `filetransfer` — `TestSanitizeFileName_*`, `TestUniqueDestPath_*`.
+- `integration` — `TestLookupAfterSeedDown`,
+  `TestBootstrapFailsOnEmptyTable`, `TestFindValuePicksHighestSeq`,
+  `TestPublishFailsOnNoCandidates`, `TestAntiRollback`.
+
 ## 8. Порядок выполнения
 
 ```
@@ -295,6 +366,32 @@ E7-5 (underlay) ──────▶ E7-7 (профиль) ──────�
 - seed (если применимо);
 - временную базу (Unix ms);
 - N, k, ALPHA, R, тайм-ауты;
-- схему bootstrap.
+- схему bootstrap;
+- `SubnetDiversityLimit`, `RefreshInterval`.
 
 **Manifest** сохраняется рядом с данными в формате JSON.
+
+## 10. Дополнительные юнит-тесты
+
+Помимо демо-скриптов, **регрессия** покрыта unit-тестами:
+
+- **`TestLookupAfterSeedDown`** (`internal/integration/lookup_seed_down_test.go`) —
+  lookup после kill seed'а (E6-5 unit).
+- **`TestBootstrapFailsOnEmptyTable`** — `Bootstrap` → error при
+  недоступных seed'ах.
+- **`TestFindValuePicksHighestSeq`** — `FindValue` max(seq) среди
+  реплик (E3-4 unit).
+- **`TestPublishFailsOnNoCandidates`** — `Publish` → `ErrNotEnoughReplicas`
+  при N=1.
+- **`TestAntiRollback`** — `Publish(seq=5)` после `seq=10` →
+  `ErrNotEnoughReplicas`.
+- **`TestSanitizeFileName_OK`/`Reject`**, **`TestUniqueDestPath_*`** —
+  безопасность имени файла (E7-4 unit).
+- **`TestBucketFillsToK_*`**, **`TestBucketSubnetDiversityRejectsThird`**,
+  **`TestSubnetDiversityLimitAccessors`** — subnet diversity (E7-8 unit).
+- **`TestRPC_SilentPeer_HandshakeDeadline`** — единый дедлайн RPC.
+- **`TestConn_WriteDeadline_PeerNotReading`**,
+  **`TestConn_ReadDeadline_SilentPeer`** — таймауты транспортного уровня.
+- **`TestReadFrame_RandomChunkBoundaries`**, **`ChunkedSizes`**,
+  **`TwoFramesChunked`**, **`EOFWithData`** — кадрирование при
+  случайных границах.

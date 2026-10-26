@@ -108,8 +108,11 @@ func TestAntiRollback(t *testing.T) {
 	rec5 := makeNodeRecord(t, nodes[0], 3*time.Minute, 5)
 	_, err := nodes[0].Publish(rec5, 3*time.Minute)
 
-	if err == nil {
-		t.Logf("Publish rec5 didn't return error (may be ok if remote took priority)")
+	if err != nil && !errors.Is(err, node.ErrNotEnoughReplicas) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err != nil {
+		t.Logf("Publish rec5 rejected as expected: %v", err)
 	}
 
 	key := node.NodeKeyForID(rec10.NodeID)
@@ -147,4 +150,75 @@ func TestFindValueAfterNodeShutdown(t *testing.T) {
 	if found.NodeID != rec.NodeID {
 		t.Fatal("wrong node")
 	}
+}
+
+func TestFindValuePicksHighestSeq(t *testing.T) {
+	nodes := startCluster(t, 5, 19400)
+	time.Sleep(300 * time.Millisecond)
+
+	recOld := makeNodeRecord(t, nodes[0], 3*time.Minute, 5)
+	recNew := makeNodeRecord(t, nodes[0], 3*time.Minute, 10)
+
+	key := node.NodeKeyForID(recOld.NodeID)
+
+	if _, err := nodes[1].Store.Put(key, recOld, time.Now(), 3*time.Minute); err != nil {
+		t.Fatalf("put old in node-1: %v", err)
+	}
+	if _, err := nodes[2].Store.Put(key, recNew, time.Now(), 3*time.Minute); err != nil {
+		t.Fatalf("put new in node-2: %v", err)
+	}
+
+	if _, ok := nodes[3].Store.Get(key, time.Now()); ok {
+		t.Fatal("precondition: node-3 should not have the record")
+	}
+
+	for _, ct := range nodes[3].Table.Snapshot() {
+		if ct.NodeID != nodes[1].Local.NodeID && ct.NodeID != nodes[2].Local.NodeID {
+			nodes[3].Table.Remove(ct.NodeID)
+		}
+	}
+	nodes[3].Table.Add(nodes[1].Local, nil)
+	nodes[3].Table.Add(nodes[2].Local, nil)
+
+	if got := nodes[3].Table.Size(); got != 2 {
+		t.Fatalf("precondition: node-3 table size=%d, want 2", got)
+	}
+
+	found, err := nodes[3].FindValue(key)
+	if err != nil {
+		t.Fatalf("FindValue: %v", err)
+	}
+	if found.SequenceNumber != 10 {
+		t.Fatalf("expected seq=10 (highest), got %d", found.SequenceNumber)
+	}
+	t.Logf("OK: picked seq=%d (highest among replicas)", found.SequenceNumber)
+
+	stored, ok := nodes[3].Store.Get(key, time.Now())
+	if !ok {
+		t.Fatal("record not stored locally after FindValue")
+	}
+	if stored.SequenceNumber != 10 {
+		t.Fatalf("local store seq=%d, want 10", stored.SequenceNumber)
+	}
+}
+
+func TestPublishFailsOnNoCandidates(t *testing.T) {
+	nodes := startCluster(t, 1, 19600)
+	time.Sleep(100 * time.Millisecond)
+
+	rec := makeNodeRecord(t, nodes[0], 3*time.Minute, 1)
+
+	result, err := nodes[0].Publish(rec, 3*time.Minute)
+	if err == nil {
+		t.Fatalf("Publish should fail: no candidates, got %d replicas",
+			result.Replicas)
+	}
+	if !errors.Is(err, node.ErrNotEnoughReplicas) {
+		t.Fatalf("want ErrNotEnoughReplicas, got %v", err)
+	}
+	if result == nil {
+		t.Fatal("result should be non-nil even on error (for diagnostics)")
+	}
+	t.Logf("OK: Publish failed with %v (replicas=%d, local=%v)",
+		err, result.Replicas, result.LocalStored)
 }

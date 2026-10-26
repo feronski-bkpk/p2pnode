@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
@@ -179,7 +180,7 @@ func TestTunnelIntegration_EndToEnd(t *testing.T) {
 		Log: log,
 	}
 
-	res, err := bc.Build(bob.id, path)
+	res, err := bc.Build(context.Background(), bob.id, path)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -286,7 +287,7 @@ func TestTunnelIntegration_NoPlaintextOnRelay(t *testing.T) {
 		FindDest:     findDest,
 		BuildConfig:  BuildConfig{BuildTimeout: 10 * time.Second, MaxHops: 1, TTL: time.Minute},
 	}
-	res, err := bc.Build(bob.id, path)
+	res, err := bc.Build(context.Background(), bob.id, path)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -380,6 +381,7 @@ func (c *fakeConn) Close() error {
 	}
 	return nil
 }
+func (c *fakeConn) SetDeadline(t time.Time) error { return nil }
 
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {

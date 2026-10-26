@@ -30,9 +30,21 @@ type Config struct {
 	ReadTimeout    time.Duration `yaml:"-"`
 	PingTimeout    time.Duration `yaml:"-"`
 
-	ConnectTimeoutMs int `yaml:"connect_timeout_ms"`
-	ReadTimeoutMs    int `yaml:"read_timeout_ms"`
-	PingTimeoutMs    int `yaml:"ping_timeout_ms"`
+	HandshakeTimeout time.Duration `yaml:"-"`
+	RPCTimeout       time.Duration `yaml:"-"`
+	LookupTimeout    time.Duration `yaml:"-"`
+
+	RefreshInterval time.Duration `yaml:"-"`
+
+	SubnetDiversityLimit int `yaml:"subnet_diversity_limit"`
+
+	ConnectTimeoutMs   int `yaml:"connect_timeout_ms"`
+	ReadTimeoutMs      int `yaml:"read_timeout_ms"`
+	PingTimeoutMs      int `yaml:"ping_timeout_ms"`
+	HandshakeTimeoutMs int `yaml:"handshake_timeout_ms"`
+	RPCTimeoutMs       int `yaml:"rpc_timeout_ms"`
+	LookupTimeoutMs    int `yaml:"lookup_timeout_ms"`
+	RefreshIntervalMs  int `yaml:"refresh_interval_ms"`
 
 	MaxFramePayload int `yaml:"max_frame_payload"`
 	ProtocolVersion int `yaml:"protocol_version"`
@@ -83,44 +95,53 @@ type Config struct {
 
 func Default() Config {
 	return Config{
-		NodeStateDir:       "./state",
-		ListenHost:         "0.0.0.0",
-		AdvertiseHost:      "",
-		ListenPort:         9000,
-		BootstrapPeers:     nil,
-		SkipSelfLookup:     false,
-		NodeIDBits:         256,
-		KBucketSize:        4,
-		Alpha:              3,
-		ConnectTimeout:     3000 * time.Millisecond,
-		ReadTimeout:        5000 * time.Millisecond,
-		PingTimeout:        5000 * time.Millisecond,
-		ConnectTimeoutMs:   3000,
-		ReadTimeoutMs:      5000,
-		PingTimeoutMs:      5000,
-		MaxFramePayload:    65536,
-		ProtocolVersion:    1,
-		LogLevel:           "INFO",
-		ExportDir:          "",
-		ExportInterval:     0,
-		ExportIntervalMs:   0,
-		DumpRouting:        false,
-		LookupTarget:       "",
-		PublishSelf:        false,
-		FindNodeID:         "",
-		PublishAlias:       "",
-		FindAlias:          "",
-		MaxHops:            3,
-		TunnelPoolSize:     3,
-		TunnelAckTimeoutMs: 5000,
-		TunnelTTLSec:       300,
-		SendRepeat:         1,
-		SendIntervalMs:     2000,
-		NoServe:            false,
-		PublishWaitMs:      3000,
-		SendTo:             "",
-		SendText:           "",
-		ExitAfterMs:        5000,
+		NodeStateDir:         "./state",
+		ListenHost:           "0.0.0.0",
+		AdvertiseHost:        "",
+		ListenPort:           9000,
+		BootstrapPeers:       nil,
+		SkipSelfLookup:       false,
+		NodeIDBits:           256,
+		KBucketSize:          4,
+		Alpha:                3,
+		ConnectTimeout:       3000 * time.Millisecond,
+		ReadTimeout:          5000 * time.Millisecond,
+		PingTimeout:          5000 * time.Millisecond,
+		HandshakeTimeout:     5000 * time.Millisecond,
+		RPCTimeout:           10000 * time.Millisecond,
+		LookupTimeout:        30000 * time.Millisecond,
+		RefreshInterval:      60000 * time.Millisecond,
+		SubnetDiversityLimit: 2,
+		ConnectTimeoutMs:     3000,
+		ReadTimeoutMs:        5000,
+		PingTimeoutMs:        5000,
+		HandshakeTimeoutMs:   5000,
+		RPCTimeoutMs:         10000,
+		LookupTimeoutMs:      30000,
+		RefreshIntervalMs:    60000,
+		MaxFramePayload:      65536,
+		ProtocolVersion:      1,
+		LogLevel:             "INFO",
+		ExportDir:            "",
+		ExportInterval:       0,
+		ExportIntervalMs:     0,
+		DumpRouting:          false,
+		LookupTarget:         "",
+		PublishSelf:          false,
+		FindNodeID:           "",
+		PublishAlias:         "",
+		FindAlias:            "",
+		MaxHops:              3,
+		TunnelPoolSize:       3,
+		TunnelAckTimeoutMs:   5000,
+		TunnelTTLSec:         300,
+		SendRepeat:           1,
+		SendIntervalMs:       2000,
+		NoServe:              false,
+		PublishWaitMs:        3000,
+		SendTo:               "",
+		SendText:             "",
+		ExitAfterMs:          5000,
 
 		SendFile:      "",
 		RecvFileDir:   "",
@@ -151,17 +172,24 @@ type yamlConfig struct {
 	ConnectTimeoutMs int      `yaml:"connect_timeout_ms"`
 	ReadTimeoutMs    int      `yaml:"read_timeout_ms"`
 	PingTimeoutMs    int      `yaml:"ping_timeout_ms"`
-	MaxFramePayload  int      `yaml:"max_frame_payload"`
-	ProtocolVersion  int      `yaml:"protocol_version"`
-	LogLevel         string   `yaml:"log_level"`
-	ExportDir        string   `yaml:"export_dir"`
-	ExportIntervalMs int      `yaml:"export_interval_ms"`
-	DumpRouting      bool     `yaml:"dump_routing"`
-	LookupTarget     string   `yaml:"lookup_target"`
-	PublishSelf      bool     `yaml:"publish_self"`
-	FindNodeID       string   `yaml:"find_node_id"`
-	PublishAlias     string   `yaml:"publish_alias"`
-	FindAlias        string   `yaml:"find_alias"`
+
+	HandshakeTimeoutMs   int `yaml:"handshake_timeout_ms"`
+	RPCTimeoutMs         int `yaml:"rpc_timeout_ms"`
+	LookupTimeoutMs      int `yaml:"lookup_timeout_ms"`
+	RefreshIntervalMs    int `yaml:"refresh_interval_ms"`
+	SubnetDiversityLimit int `yaml:"subnet_diversity_limit"`
+
+	MaxFramePayload  int    `yaml:"max_frame_payload"`
+	ProtocolVersion  int    `yaml:"protocol_version"`
+	LogLevel         string `yaml:"log_level"`
+	ExportDir        string `yaml:"export_dir"`
+	ExportIntervalMs int    `yaml:"export_interval_ms"`
+	DumpRouting      bool   `yaml:"dump_routing"`
+	LookupTarget     string `yaml:"lookup_target"`
+	PublishSelf      bool   `yaml:"publish_self"`
+	FindNodeID       string `yaml:"find_node_id"`
+	PublishAlias     string `yaml:"publish_alias"`
+	FindAlias        string `yaml:"find_alias"`
 
 	MaxHops            int  `yaml:"max_hops"`
 	TunnelPoolSize     int  `yaml:"tunnel_pool_size"`
@@ -235,6 +263,25 @@ func (c *Config) LoadFromFile(path string) error {
 	if y.PingTimeoutMs != 0 {
 		c.PingTimeout = time.Duration(y.PingTimeoutMs) * time.Millisecond
 		c.PingTimeoutMs = y.PingTimeoutMs
+	}
+	if y.HandshakeTimeoutMs != 0 {
+		c.HandshakeTimeout = time.Duration(y.HandshakeTimeoutMs) * time.Millisecond
+		c.HandshakeTimeoutMs = y.HandshakeTimeoutMs
+	}
+	if y.RPCTimeoutMs != 0 {
+		c.RPCTimeout = time.Duration(y.RPCTimeoutMs) * time.Millisecond
+		c.RPCTimeoutMs = y.RPCTimeoutMs
+	}
+	if y.LookupTimeoutMs != 0 {
+		c.LookupTimeout = time.Duration(y.LookupTimeoutMs) * time.Millisecond
+		c.LookupTimeoutMs = y.LookupTimeoutMs
+	}
+	if y.SubnetDiversityLimit != 0 {
+		c.SubnetDiversityLimit = y.SubnetDiversityLimit
+	}
+	if y.RefreshIntervalMs != 0 {
+		c.RefreshInterval = time.Duration(y.RefreshIntervalMs) * time.Millisecond
+		c.RefreshIntervalMs = y.RefreshIntervalMs
 	}
 	if y.MaxFramePayload != 0 {
 		c.MaxFramePayload = y.MaxFramePayload
@@ -354,6 +401,11 @@ func Load(args []string) (Config, error) {
 		connectMs      = fs.Int("connect-timeout-ms", envInt("CONNECT_TIMEOUT_MS", int(cfg.ConnectTimeout.Milliseconds())), "CONNECT_TIMEOUT_MS")
 		readMs         = fs.Int("read-timeout-ms", envInt("READ_TIMEOUT_MS", int(cfg.ReadTimeout.Milliseconds())), "READ_TIMEOUT_MS")
 		pingMs         = fs.Int("ping-timeout-ms", envInt("PING_TIMEOUT_MS", int(cfg.PingTimeout.Milliseconds())), "PING_TIMEOUT_MS")
+		handshakeMs    = fs.Int("handshake-timeout-ms", envInt("HANDSHAKE_TIMEOUT_MS", int(cfg.HandshakeTimeout.Milliseconds())), "HANDSHAKE_TIMEOUT_MS")
+		rpcMs          = fs.Int("rpc-timeout-ms", envInt("RPC_TIMEOUT_MS", int(cfg.RPCTimeout.Milliseconds())), "RPC_TIMEOUT_MS")
+		lookupMs       = fs.Int("lookup-timeout-ms", envInt("LOOKUP_TIMEOUT_MS", int(cfg.LookupTimeout.Milliseconds())), "LOOKUP_TIMEOUT_MS")
+		refreshMs      = fs.Int("refresh-interval-ms", envInt("REFRESH_INTERVAL_MS", int(cfg.RefreshInterval.Milliseconds())), "REFRESH_INTERVAL_MS")
+		subnetLimit    = fs.Int("subnet-diversity-limit", envInt("SUBNET_DIVERSITY_LIMIT", cfg.SubnetDiversityLimit), "SUBNET_DIVERSITY_LIMIT")
 		maxFrame       = fs.Int("max-frame-payload", envInt("MAX_FRAME_PAYLOAD", cfg.MaxFramePayload), "MAX_FRAME_PAYLOAD")
 		logLevel       = fs.String("log-level", envStr("LOG_LEVEL", cfg.LogLevel), "DEBUG|INFO|WARN|ERROR")
 		exportDir      = fs.String("export-dir", envStr("EXPORT_DIR", cfg.ExportDir), "каталог для экспорта JSON-метрик")
@@ -421,6 +473,15 @@ func Load(args []string) (Config, error) {
 	cfg.ReadTimeoutMs = *readMs
 	cfg.PingTimeout = time.Duration(*pingMs) * time.Millisecond
 	cfg.PingTimeoutMs = *pingMs
+	cfg.HandshakeTimeout = time.Duration(*handshakeMs) * time.Millisecond
+	cfg.HandshakeTimeoutMs = *handshakeMs
+	cfg.RPCTimeout = time.Duration(*rpcMs) * time.Millisecond
+	cfg.RPCTimeoutMs = *rpcMs
+	cfg.LookupTimeout = time.Duration(*lookupMs) * time.Millisecond
+	cfg.LookupTimeoutMs = *lookupMs
+	cfg.RefreshInterval = time.Duration(*refreshMs) * time.Millisecond
+	cfg.SubnetDiversityLimit = *subnetLimit
+	cfg.RefreshIntervalMs = *refreshMs
 	cfg.MaxFramePayload = *maxFrame
 	cfg.LogLevel = strings.ToUpper(*logLevel)
 	cfg.ExportDir = *exportDir
@@ -538,6 +599,21 @@ func (c Config) Validate() error {
 	}
 	if c.LookupPaths > 8 {
 		return fmt.Errorf("config: lookup_paths must be <= 8, got %d", c.LookupPaths)
+	}
+	if c.HandshakeTimeout <= 0 {
+		return fmt.Errorf("config: handshake_timeout_ms must be > 0, got %d", c.HandshakeTimeoutMs)
+	}
+	if c.RPCTimeout <= 0 {
+		return fmt.Errorf("config: rpc_timeout_ms must be > 0, got %d", c.RPCTimeoutMs)
+	}
+	if c.LookupTimeout <= 0 {
+		return fmt.Errorf("config: lookup_timeout_ms must be > 0, got %d", c.LookupTimeoutMs)
+	}
+	if c.RefreshInterval <= 0 {
+		return fmt.Errorf("config: refresh_interval_ms must be > 0, got %d", c.RefreshIntervalMs)
+	}
+	if c.SubnetDiversityLimit < 0 {
+		return fmt.Errorf("config: subnet_diversity_limit must be >= 0, got %d", c.SubnetDiversityLimit)
 	}
 	if c.SybilMode {
 		if c.SybilVictim == "" {

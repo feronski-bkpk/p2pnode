@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"time"
 
 	"p2pnode/internal/protocol"
@@ -8,7 +9,7 @@ import (
 	"p2pnode/internal/transport"
 )
 
-func (c *Client) Ping(local routing.Contact, addr string, expectedID *routing.ID, timeout time.Duration) (routing.Contact, error) {
+func (c *Client) Ping(ctx context.Context, local routing.Contact, addr string, expectedID *routing.ID, timeout time.Duration) (routing.Contact, error) {
 	payload, err := protocol.Encode(protocol.PingPayload{
 		Sender:      local.ToProtocol(),
 		TimestampMs: uint64(time.Now().UnixMilli()),
@@ -17,7 +18,7 @@ func (c *Client) Ping(local routing.Contact, addr string, expectedID *routing.ID
 		return routing.Contact{}, err
 	}
 
-	frame, err := c.Call(addr, protocol.MsgPing, protocol.MsgPong, payload, timeout)
+	frame, err := c.Call(ctx, addr, protocol.MsgPing, protocol.MsgPong, payload, timeout)
 	if err != nil {
 		return routing.Contact{}, err
 	}
